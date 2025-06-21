@@ -104,7 +104,7 @@ class TokenManager:
             self._refresh_token_value = token_data.get("refresh_token")
 
             logger.info(f"Got new token, expires in {token_data['expires_in']} seconds")
-            return self._access_token
+            return token_data["access_token"]
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to get access token: {str(e)}")
@@ -143,7 +143,7 @@ class TokenManager:
             self._token_expiry = time.time() + token_data["expires_in"]
             self._refresh_token_value = token_data.get("refresh_token")
 
-            return self._access_token
+            return token_data["access_token"]
 
         except Exception as e:
             raise NinjaRMMAuthError(f"Failed to refresh token: {str(e)}")
