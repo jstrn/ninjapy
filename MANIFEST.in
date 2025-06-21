@@ -1,0 +1,26 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include pyproject.toml
+include MANIFEST.in
+include .env.example
+include example_with_env.py
+
+# Include the py.typed file to indicate this is a typed package
+include ninjapy/py.typed
+
+# Include any documentation
+recursive-include docs *
+prune docs/_build
+
+# Exclude development and build artifacts
+exclude .gitignore
+exclude .pre-commit-config.yaml
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+recursive-exclude * .pytest_cache
+recursive-exclude * .coverage
+recursive-exclude * htmlcov
+recursive-exclude * .tox
+recursive-exclude * .mypy_cache
+recursive-exclude tests * 

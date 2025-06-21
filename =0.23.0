@@ -1,0 +1,11 @@
+Collecting responses
+  Downloading responses-0.25.7-py3-none-any.whl.metadata (47 kB)
+Requirement already satisfied: requests<3.0,>=2.30.0 in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from responses) (2.32.4)
+Requirement already satisfied: urllib3<3.0,>=1.25.10 in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from responses) (2.5.0)
+Requirement already satisfied: pyyaml in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from responses) (6.0.2)
+Requirement already satisfied: charset_normalizer<4,>=2 in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from requests<3.0,>=2.30.0->responses) (3.4.2)
+Requirement already satisfied: idna<4,>=2.5 in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from requests<3.0,>=2.30.0->responses) (3.10)
+Requirement already satisfied: certifi>=2017.4.17 in /home/jstringer/.pyenv/versions/3.13.2/lib/python3.13/site-packages (from requests<3.0,>=2.30.0->responses) (2025.6.15)
+Downloading responses-0.25.7-py3-none-any.whl (34 kB)
+Installing collected packages: responses
+Successfully installed responses-0.25.7
