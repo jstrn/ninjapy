@@ -110,9 +110,7 @@ class NinjaRMMClient:
         """
         self.base_url = base_url.rstrip("/")
         self.convert_timestamps = convert_timestamps
-        self.token_manager = TokenManager(
-            token_url, client_id, client_secret, scope
-        )
+        self.token_manager = TokenManager(token_url, client_id, client_secret, scope)
         self.session = requests.Session()
         self.session.headers.update(
             {"Content-Type": "application/json", "Accept": "application/json"}
@@ -173,24 +171,20 @@ class NinjaRMMClient:
         )
 
         url = f"{self.base_url}{endpoint}"
-        logger.info(
-            f"Preparing request: {method} {url} with kwargs: {kwargs}"
-        )
+        logger.info(f"Preparing request: {method} {url} with kwargs: {kwargs}")
 
         try:
             logger.info("Sending HTTP request now...")
             # Explicitly set a timeout to prevent indefinite hangs
             response = self.session.request(method, url, timeout=10, **kwargs)
             logger.info(
-                f"HTTP request completed with status code: "
-                f"{response.status_code}"
+                f"HTTP request completed with status code: " f"{response.status_code}"
             )
 
             # Handle rate limiting explicitly
             if response.status_code == 429:
                 retry_after = int(response.headers.get("Retry-After", 10))
-                logger.warning(
-                    f"Rate limited. Retrying after {retry_after} seconds.")
+                logger.warning(f"Rate limited. Retrying after {retry_after} seconds.")
                 time.sleep(retry_after)
                 return self._request(method, endpoint, **kwargs)
 
@@ -230,8 +224,7 @@ class NinjaRMMClient:
             elif e.response.status_code == 404:
                 raise NinjaRMMError("Resource not found")
             else:
-                raise NinjaRMMAPIError(
-                    message, e.response.status_code, error_data)
+                raise NinjaRMMAPIError(message, e.response.status_code, error_data)
 
         except requests.exceptions.RequestException as e:
             logger.error(f"RequestException encountered: {str(e)}")
@@ -373,8 +366,7 @@ class NinjaRMMClient:
             alert_uid (str): Alert/condition UID
             activity_data (Dict): Custom activity data
         """
-        self._request(
-            "POST", f"/v2/alert/{alert_uid}/reset", json=activity_data)
+        self._request("POST", f"/v2/alert/{alert_uid}/reset", json=activity_data)
 
     def get_organization(self, org_id: int) -> Dict:
         """
@@ -566,8 +558,7 @@ class NinjaRMMClient:
             org_id (int): Organization identifier
             location_id (int): Location identifier
         """
-        self._request(
-            "DELETE", f"/v2/organizations/{org_id}/locations/{location_id}")
+        self._request("DELETE", f"/v2/organizations/{org_id}/locations/{location_id}")
 
     def get_organization_policies(self, org_id: int) -> List[Dict]:
         """
@@ -991,8 +982,7 @@ class NinjaRMMClient:
             policy_id (int): Policy identifier
             condition_id (str): Condition identifier
         """
-        self._request(
-            "DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}")
+        self._request("DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}")
 
     def configure_webhook(
         self,
@@ -1467,8 +1457,7 @@ class NinjaRMMClient:
     ) -> None:
         """Control a Windows service on a device."""
         if action not in ("START", "STOP", "RESTART", "PAUSE", "RESUME"):
-            raise NinjaRMMValidationError(
-                "Invalid service control action", "action")
+            raise NinjaRMMValidationError("Invalid service control action", "action")
 
     def get_device_dashboard_url(self, device_id: int) -> str:
         """
@@ -1736,8 +1725,7 @@ class NinjaRMMClient:
             enabled: Whether to convert epoch timestamps to ISO format
         """
         self.convert_timestamps = enabled
-        logger.info(
-            f"Timestamp conversion {'enabled' if enabled else 'disabled'}")
+        logger.info(f"Timestamp conversion {'enabled' if enabled else 'disabled'}")
 
     def get_timestamp_conversion_status(self) -> bool:
         """
@@ -2368,8 +2356,7 @@ class NinjaRMMClient:
             if not isinstance(fields, dict):
                 raise ValueError("fields must be a dictionary")
             # Remove None values from fields
-            document["fields"] = {k: v for k,
-                                  v in fields.items() if v is not None}
+            document["fields"] = {k: v for k, v in fields.items() if v is not None}
 
         # Create a single document using the bulk endpoint
         return self.create_organization_documents([document])[0]
@@ -2443,8 +2430,7 @@ class NinjaRMMClient:
             if not isinstance(fields, dict):
                 raise ValueError("fields must be a dictionary")
             # Remove None values from fields
-            document["fields"] = {k: v for k,
-                                  v in fields.items() if v is not None}
+            document["fields"] = {k: v for k, v in fields.items() if v is not None}
 
         return self._request(
             "PATCH", f"/v2/organization/documents/{document_id}", json=document
@@ -2491,16 +2477,14 @@ class NinjaRMMClient:
             for field in fields:
                 if not isinstance(field, dict):
                     raise ValueError("Each field must be a dictionary")
-                processed_field = {k: v for k,
-                                   v in field.items() if v is not None}
+                processed_field = {k: v for k, v in field.items() if v is not None}
                 processed_fields.append(processed_field)
             data["fields"] = processed_fields
         if available_to_all_technicians is not None:
             data["availableToAllTechnicians"] = available_to_all_technicians
         if allowed_technician_roles is not None:
             if not isinstance(allowed_technician_roles, list):
-                raise ValueError(
-                    "allowed_technician_roles must be a list of integers")
+                raise ValueError("allowed_technician_roles must be a list of integers")
             data["allowedTechnicianRoles"] = allowed_technician_roles
 
         return self._request("PUT", f"/v2/templates/{template_id}", json=data)
@@ -2540,8 +2524,7 @@ class NinjaRMMClient:
         params = {}
         if group_by is not None:
             if group_by not in ("TEMPLATE", "ORGANIZATION"):
-                raise ValueError(
-                    "group_by must be either 'TEMPLATE' or 'ORGANIZATION'")
+                raise ValueError("group_by must be either 'TEMPLATE' or 'ORGANIZATION'")
             params["groupBy"] = group_by
         if organization_ids is not None:
             params["organizationIds"] = organization_ids
@@ -3256,8 +3239,7 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
         if include_deleted_devices is not None:
-            params["includeDeletedDevices"] = str(
-                include_deleted_devices).lower()
+            params["includeDeletedDevices"] = str(include_deleted_devices).lower()
 
         return self._request("GET", "/v2/queries/backup/usage", params=params)
 
@@ -3602,8 +3584,7 @@ class NinjaRMMClient:
         """
         params = {}
         if include_technician_roles is not None:
-            params["includeTechnicianRoles"] = str(
-                include_technician_roles).lower()
+            params["includeTechnicianRoles"] = str(include_technician_roles).lower()
 
         return self._request(
             "GET", f"/v2/document-templates/{template_id}", params=params
@@ -3675,12 +3656,10 @@ class NinjaRMMClient:
         after = None
 
         while True:
-            logger.info(
-                f"Fetching page with page_size={page_size}, after={after}")
+            logger.info(f"Fetching page with page_size={page_size}, after={after}")
 
             # Call the method with current pagination parameters
-            page_results = method_func(
-                page_size=page_size, after=after, **kwargs)
+            page_results = method_func(page_size=page_size, after=after, **kwargs)
 
             # If no results, we're done
             if not page_results:
@@ -3719,17 +3698,14 @@ class NinjaRMMClient:
         cursor = None
 
         while True:
-            logger.info(
-                f"Fetching page with page_size={page_size}, cursor={cursor}")
+            logger.info(f"Fetching page with page_size={page_size}, cursor={cursor}")
 
             # Call the method with current pagination parameters
-            response = method_func(page_size=page_size,
-                                   cursor=cursor, **kwargs)
+            response = method_func(page_size=page_size, cursor=cursor, **kwargs)
 
             # Handle the response structure for cursor-based endpoints
             if not isinstance(response, dict):
-                logger.error(
-                    "Expected dict response for cursor-based pagination")
+                logger.error("Expected dict response for cursor-based pagination")
                 break
 
             # Get the results from the response
@@ -3775,8 +3751,7 @@ class NinjaRMMClient:
             List[Dict]: All items from all pages
         """
         return list(
-            self._paginate_with_after(
-                method_func, page_size=page_size, **kwargs)
+            self._paginate_with_after(method_func, page_size=page_size, **kwargs)
         )
 
     def _get_all_with_cursor(
@@ -3794,6 +3769,5 @@ class NinjaRMMClient:
             List[Dict]: All items from all pages
         """
         return list(
-            self._paginate_with_cursor(
-                method_func, page_size=page_size, **kwargs)
+            self._paginate_with_cursor(method_func, page_size=page_size, **kwargs)
         )

@@ -121,8 +121,7 @@ class TestTimestampConversion:
 
     def test_convert_timestamps_custom_fields(self):
         """Test timestamp conversion with custom field names."""
-        data = {"id": 123, "customTime": 1728487941.725760,
-                "regularField": "value"}
+        data = {"id": 123, "customTime": 1728487941.725760, "regularField": "value"}
 
         custom_fields = {"customTime"}
         result = convert_timestamps_in_data(data, field_names=custom_fields)
@@ -161,8 +160,7 @@ class TestTimestampConversion:
 
     def test_process_api_response_additional_fields(self):
         """Test API response processing with additional timestamp fields."""
-        response_data = {"customTimeField": 1728487941.725760,
-                         "regularField": "value"}
+        response_data = {"customTimeField": 1728487941.725760, "regularField": "value"}
 
         additional_fields = {"customTimeField"}
         result = process_api_response(

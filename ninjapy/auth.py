@@ -17,9 +17,7 @@ logger = logging.getLogger("ninjapy.auth")
 class TokenManager:
     """Manages OAuth2 token lifecycle for NinjaRMM API"""
 
-    def __init__(
-        self, token_url: str, client_id: str, client_secret: str, scope: str
-    ):
+    def __init__(self, token_url: str, client_id: str, client_secret: str, scope: str):
         """
         Initialize the token manager.
 
@@ -105,20 +103,16 @@ class TokenManager:
             self._token_expiry = time.time() + token_data["expires_in"]
             self._refresh_token_value = token_data.get("refresh_token")
 
-            logger.info(
-                f"Got new token, expires in {token_data['expires_in']} seconds")
+            logger.info(f"Got new token, expires in {token_data['expires_in']} seconds")
             return self._access_token
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to get access token: {str(e)}")
             # Log more details about the error
             if hasattr(e, "response") and e.response:
-                logger.error(
-                    f"Error response status: {e.response.status_code}")
-                logger.error(
-                    f"Error response content: {e.response.text[:200]}...")
-            raise NinjaRMMAuthError(
-                f"Failed to get new access token: {str(e)}")
+                logger.error(f"Error response status: {e.response.status_code}")
+                logger.error(f"Error response content: {e.response.text[:200]}...")
+            raise NinjaRMMAuthError(f"Failed to get new access token: {str(e)}")
 
     def _refresh_token(self) -> str:
         """
@@ -203,7 +197,6 @@ class TokenManager:
         if self._token_expiry:
             # Set expiry to current time minus 10 seconds
             self._token_expiry = time.time() - 10
-            logger.info(
-                f"Token expiry forced to past time: {self._token_expiry}")
+            logger.info(f"Token expiry forced to past time: {self._token_expiry}")
         else:
             logger.info("No token exists to expire")

@@ -153,8 +153,7 @@ class TestTokenManager:
         request = responses.calls[0].request
 
         # Parse the request body
-        body = request.body if isinstance(
-            request.body, str) else request.body.decode()
+        body = request.body if isinstance(request.body, str) else request.body.decode()
         body_params = dict(param.split("=") for param in body.split("&"))
 
         assert body_params["grant_type"] == "client_credentials"
@@ -168,8 +167,7 @@ class TestTokenManager:
         import requests
 
         with patch("requests.post") as mock_post:
-            mock_post.side_effect = requests.exceptions.ConnectionError(
-                "Network error")
+            mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
 
             with pytest.raises(NinjaRMMAuthError):
                 self.token_manager._get_new_access_token()
@@ -177,8 +175,7 @@ class TestTokenManager:
     @responses.activate
     def test_malformed_response_handling(self):
         """Test handling of malformed JSON responses."""
-        responses.add(responses.POST, self.token_url,
-                      body="invalid json", status=200)
+        responses.add(responses.POST, self.token_url, body="invalid json", status=200)
 
         with pytest.raises(NinjaRMMAuthError):
             self.token_manager._get_new_access_token()

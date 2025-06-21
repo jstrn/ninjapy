@@ -55,8 +55,7 @@ class TestNinjaRMMExceptions:
     def test_api_error_with_details(self):
         """Test NinjaRMMAPIError with details."""
         details = {"field": "organizationId", "error": "required"}
-        error = NinjaRMMAPIError(
-            "Validation failed", status_code=400, details=details)
+        error = NinjaRMMAPIError("Validation failed", status_code=400, details=details)
 
         assert str(error) == "Validation failed"
         assert error.message == "Validation failed"

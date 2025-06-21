@@ -57,9 +57,9 @@ def convert_epoch_to_iso(timestamp: Union[float, int, str]) -> str:
         dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
         # Format with microseconds if present, otherwise without
         if timestamp % 1 != 0:  # Has fractional seconds
-            return dt.isoformat().replace('+00:00', 'Z')
+            return dt.isoformat().replace("+00:00", "Z")
         else:
-            return dt.replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+            return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     except (ValueError, OSError, OverflowError) as e:
         logger.warning(f"Failed to convert timestamp {timestamp}: {e}")
@@ -83,8 +83,7 @@ def is_timestamp_field(field_name: str) -> bool:
         return True
 
     # Check for common timestamp patterns
-    timestamp_patterns = ["time", "date",
-                          "timestamp", "created", "updated", "modified"]
+    timestamp_patterns = ["time", "date", "timestamp", "created", "updated", "modified"]
     return any(pattern in field_lower for pattern in timestamp_patterns)
 
 

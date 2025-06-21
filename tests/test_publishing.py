@@ -80,8 +80,7 @@ class TestPublishingScripts:
 
     def test_github_workflows_exist(self):
         """Test that GitHub Actions workflows exist."""
-        workflows = [".github/workflows/test.yml",
-                     ".github/workflows/publish.yml"]
+        workflows = [".github/workflows/test.yml", ".github/workflows/publish.yml"]
 
         for workflow in workflows:
             assert Path(workflow).exists(), f"Workflow {workflow} not found"
@@ -156,8 +155,7 @@ class TestGitHubWorkflows:
         """Test that workflow files have valid YAML syntax."""
         import yaml
 
-        workflows = [".github/workflows/test.yml",
-                     ".github/workflows/publish.yml"]
+        workflows = [".github/workflows/test.yml", ".github/workflows/publish.yml"]
 
         for workflow_path in workflows:
             path = Path(workflow_path)

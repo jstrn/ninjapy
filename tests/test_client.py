@@ -79,9 +79,7 @@ class TestNinjaRMMClient:
         with patch.object(
             self.client.token_manager, "get_valid_token", return_value="test_token"
         ):
-            self.client.get_organizations(
-                page_size=10, after=100, org_filter="test"
-            )
+            self.client.get_organizations(page_size=10, after=100, org_filter="test")
 
         # Check that parameters were included in the request
         request = responses.calls[0].request
@@ -98,8 +96,7 @@ class TestNinjaRMMClient:
                 "displayName": "Test Device 1",
                 "nodeClass": "WINDOWS_WORKSTATION",
             },
-            {"id": 2, "displayName": "Test Device 2",
-                "nodeClass": "WINDOWS_SERVER"},
+            {"id": 2, "displayName": "Test Device 2", "nodeClass": "WINDOWS_SERVER"},
         ]
 
         responses.add(
@@ -405,7 +402,7 @@ class TestNinjaRMMClient:
                 json=page2,
                 status=200,
             )
-            # Third page would be empty (but since page2 has only 1 item < page_size=2, 
+            # Third page would be empty (but since page2 has only 1 item < page_size=2,
             # pagination should stop automatically)
 
             # Test iterator
@@ -571,8 +568,7 @@ class TestClientValidation:
 
             # Test that endpoint gets normalized (leading slash added)
             with responses.RequestsMock() as rsps:
-                rsps.add(responses.GET, "https://test.com/v2/test",
-                         json={}, status=200)
+                rsps.add(responses.GET, "https://test.com/v2/test", json={}, status=200)
 
                 # This should work whether we pass "v2/test" or "/v2/test"
                 with patch.object(
