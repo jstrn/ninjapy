@@ -1,9 +1,10 @@
 import requests
-from typing import Optional, Dict, List, Any, Union, Literal, Iterator
+from typing import Optional, Dict, List, Any, Union, Literal, Iterator, Generator, Callable
 from datetime import datetime
 from .exceptions import NinjaRMMError, NinjaRMMAuthError, NinjaRMMValidationError, NinjaRMMAPIError
 from .auth import TokenManager
 from .enums import NodeApprovalMode
+from .utils import process_api_response
 import time
 import logging
 from requests.adapters import HTTPAdapter
@@ -52,7 +53,8 @@ class NinjaRMMClient:
         client_id: str, 
         client_secret: str, 
         scope: str,
-        base_url: str = "https://app.ninjarmm.com"
+        base_url: str = "https://app.ninjarmm.com",
+        convert_timestamps: bool = True
     ) -> None:
         """
         Initialize the NinjaRMM API client.
@@ -63,8 +65,10 @@ class NinjaRMMClient:
             client_secret: OAuth2 client secret
             scope: OAuth2 scope(s)
             base_url: Base URL for the API. Defaults to https://api.ninjarmm.com
+            convert_timestamps: Whether to automatically convert epoch timestamps to ISO format. Defaults to True.
         """
         self.base_url = base_url.rstrip('/')
+        self.convert_timestamps = convert_timestamps
         self.token_manager = TokenManager(token_url, client_id, client_secret, scope)
         self.session = requests.Session()
         self.session.headers.update({
@@ -139,7 +143,13 @@ class NinjaRMMClient:
                 return None
                 
             logger.info("Parsing JSON response.")
-            return response.json()
+            response_data = response.json()
+            
+            # Apply timestamp conversion if enabled
+            if self.convert_timestamps:
+                response_data = process_api_response(response_data, convert_timestamps=True)
+                
+            return response_data
             
         except requests.exceptions.Timeout:
             logger.error("Request timed out.")
@@ -1552,6 +1562,380 @@ class NinjaRMMClient:
     def close(self) -> None:
         """Close the session and cleanup resources."""
         self.session.close()
+    
+    def set_timestamp_conversion(self, enabled: bool) -> None:
+        """
+        Enable or disable automatic timestamp conversion.
+        
+        Args:
+            enabled: Whether to convert epoch timestamps to ISO format
+        """
+        self.convert_timestamps = enabled
+        logger.info(f"Timestamp conversion {'enabled' if enabled else 'disabled'}")
+    
+    def get_timestamp_conversion_status(self) -> bool:
+        """
+        Get the current timestamp conversion status.
+        
+        Returns:
+            True if timestamp conversion is enabled, False otherwise
+        """
+        return self.convert_timestamps
+
+    # Auto-pagination methods for easy retrieval of all records
+    
+    def get_all_organizations(self, page_size: int = 100, org_filter: Optional[str] = None) -> List[Dict]:
+        """
+        Get ALL organizations using automatic pagination.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            
+        Returns:
+            List[Dict]: All organizations from all pages
+        """
+        return self._get_all_with_after(self.get_organizations, page_size=page_size, org_filter=org_filter)
+    
+    def get_all_organizations_detailed(self, page_size: int = 100, org_filter: Optional[str] = None) -> List[Dict]:
+        """
+        Get ALL organizations with detailed information using automatic pagination.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            
+        Returns:
+            List[Dict]: All detailed organizations from all pages
+        """
+        return self._get_all_with_after(self.get_organizations_detailed, page_size=page_size, org_filter=org_filter)
+    
+    def get_all_devices(self, page_size: int = 100, org_filter: Optional[str] = None, 
+                       expand: Optional[str] = None, include_backup_usage: bool = False) -> List[Dict]:
+        """
+        Get ALL devices using automatic pagination.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            expand: Expand fields
+            include_backup_usage: Whether to include backup usage data
+            
+        Returns:
+            List[Dict]: All devices from all pages
+        """
+        return self._get_all_with_after(
+            self.get_devices, 
+            page_size=page_size, 
+            org_filter=org_filter, 
+            expand=expand, 
+            include_backup_usage=include_backup_usage
+        )
+    
+    def get_all_devices_detailed(self, page_size: int = 100, org_filter: Optional[str] = None,
+                               expand: Optional[str] = None, include_backup_usage: bool = False) -> List[Dict]:
+        """
+        Get ALL devices with detailed information using automatic pagination.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            expand: Expand fields
+            include_backup_usage: Whether to include backup usage data
+            
+        Returns:
+            List[Dict]: All detailed devices from all pages
+        """
+        return self._get_all_with_after(
+            self.get_devices_detailed, 
+            page_size=page_size, 
+            org_filter=org_filter, 
+            expand=expand, 
+            include_backup_usage=include_backup_usage
+        )
+    
+    def search_all_devices(self, query: str, page_size: int = 100, **kwargs) -> List[Dict]:
+        """
+        Search ALL devices using automatic cursor-based pagination.
+        
+        Args:
+            query: Search query
+            page_size: Number of items per page (default: 100)
+            **kwargs: Additional search parameters
+            
+        Returns:
+            List[Dict]: All matching devices from all pages
+        """
+        return self._get_all_with_cursor(self.search_devices, page_size=page_size, query=query, **kwargs)
+    
+    def get_all_device_activities(self, device_id: int, start_time: Optional[float] = None,
+                                end_time: Optional[float] = None, activity_type: Optional[str] = None,
+                                page_size: int = 100) -> List[Dict]:
+        """
+        Get ALL device activities using automatic cursor-based pagination.
+        
+        Args:
+            device_id: Device ID
+            start_time: Start time (Unix timestamp)
+            end_time: End time (Unix timestamp)
+            activity_type: Activity type filter
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All device activities from all pages
+        """
+        return self._get_all_with_cursor(
+            self.get_device_activities, 
+            page_size=page_size,
+            device_id=device_id,
+            start_time=start_time,
+            end_time=end_time,
+            activity_type=activity_type
+        )
+    
+    def get_all_activities(self, start_time: Optional[float] = None, end_time: Optional[float] = None,
+                         activity_type: Optional[str] = None, page_size: int = 100) -> List[Dict]:
+        """
+        Get ALL activities using automatic cursor-based pagination.
+        
+        Args:
+            start_time: Start time (Unix timestamp)
+            end_time: End time (Unix timestamp)
+            activity_type: Activity type filter
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All activities from all pages
+        """
+        return self._get_all_with_cursor(
+            self.list_activities, 
+            page_size=page_size,
+            start_time=start_time,
+            end_time=end_time,
+            activity_type=activity_type
+        )
+    
+    # Iterator methods for memory-efficient processing
+    
+    def iter_all_organizations(self, page_size: int = 100, org_filter: Optional[str] = None) -> Iterator[Dict]:
+        """
+        Iterate through ALL organizations one at a time using automatic pagination.
+        Memory-efficient for processing large datasets.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            
+        Yields:
+            Dict: Organization objects one at a time
+        """
+        yield from self._paginate_with_after(self.get_organizations, page_size=page_size, org_filter=org_filter)
+    
+    def iter_all_devices(self, page_size: int = 100, org_filter: Optional[str] = None, 
+                        expand: Optional[str] = None, include_backup_usage: bool = False) -> Iterator[Dict]:
+        """
+        Iterate through ALL devices one at a time using automatic pagination.
+        Memory-efficient for processing large datasets.
+        
+        Args:
+            page_size: Number of items per page (default: 100)
+            org_filter: Organization filter
+            expand: Expand fields
+            include_backup_usage: Whether to include backup usage data
+            
+        Yields:
+            Dict: Device objects one at a time
+        """
+        yield from self._paginate_with_after(
+            self.get_devices, 
+            page_size=page_size, 
+            org_filter=org_filter, 
+            expand=expand, 
+            include_backup_usage=include_backup_usage
+        )
+    
+    def iter_search_devices(self, query: str, page_size: int = 100, **kwargs) -> Iterator[Dict]:
+        """
+        Iterate through ALL search results one at a time using automatic cursor-based pagination.
+        Memory-efficient for processing large datasets.
+        
+        Args:
+            query: Search query
+            page_size: Number of items per page (default: 100)
+            **kwargs: Additional search parameters
+            
+        Yields:
+            Dict: Device objects one at a time
+        """
+        yield from self._paginate_with_cursor(self.search_devices, page_size=page_size, query=query, **kwargs)
+    
+    # Auto-pagination methods for query endpoints (/v2/queries)
+    
+    def query_all_windows_services(self, device_filter: Optional[str] = None, name: Optional[str] = None,
+                                  state: Optional[str] = None, page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL Windows services using automatic cursor-based pagination.
+        
+        Args:
+            device_filter: Device filter expression
+            name: Service name filter
+            state: Service state filter
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All Windows services from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_windows_services, 
+            page_size=page_size,
+            device_filter=device_filter,
+            name=name,
+            state=state
+        )
+    
+    def query_all_operating_systems(self, device_filter: Optional[str] = None, 
+                                   timestamp_filter: Optional[str] = None, page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL operating systems using automatic cursor-based pagination.
+        
+        Args:
+            device_filter: Device filter expression
+            timestamp_filter: Timestamp filter expression
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All operating systems from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_operating_systems,
+            page_size=page_size,
+            device_filter=device_filter,
+            timestamp_filter=timestamp_filter
+        )
+    
+    def query_all_os_patches(self, device_filter: Optional[str] = None, timestamp_filter: Optional[str] = None,
+                           status: Optional[str] = None, patch_type: Optional[str] = None,
+                           severity: Optional[str] = None, page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL OS patches using automatic cursor-based pagination.
+        
+        Args:
+            device_filter: Device filter expression
+            timestamp_filter: Timestamp filter expression
+            status: Patch status filter
+            patch_type: Patch type filter
+            severity: Patch severity filter
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All OS patches from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_os_patches,
+            page_size=page_size,
+            device_filter=device_filter,
+            timestamp_filter=timestamp_filter,
+            status=status,
+            patch_type=patch_type,
+            severity=severity
+        )
+    
+    def query_all_custom_fields(self, device_filter: Optional[str] = None, updated_after: Optional[str] = None,
+                               fields: Optional[str] = None, show_secure_values: Optional[bool] = None,
+                               page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL custom fields using automatic cursor-based pagination.
+        
+        Args:
+            device_filter: Device filter expression
+            updated_after: Include only fields updated after this timestamp
+            fields: Comma-separated list of field names to include
+            show_secure_values: Whether to show secure field values
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All custom fields from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_custom_fields,
+            page_size=page_size,
+            device_filter=device_filter,
+            updated_after=updated_after,
+            fields=fields,
+            show_secure_values=show_secure_values
+        )
+    
+    def query_all_software(self, device_filter: Optional[str] = None, installed_before: Optional[str] = None,
+                          installed_after: Optional[str] = None, page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL software using automatic cursor-based pagination.
+        
+        Args:
+            device_filter: Device filter expression
+            installed_before: Include software installed before this date
+            installed_after: Include software installed after this date
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All software from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_software,
+            page_size=page_size,
+            device_filter=device_filter,
+            installed_before=installed_before,
+            installed_after=installed_after
+        )
+    
+    def query_all_backup_usage(self, include_deleted_devices: Optional[bool] = None, 
+                              page_size: int = 100) -> List[Dict]:
+        """
+        Query ALL backup usage using automatic cursor-based pagination.
+        
+        Args:
+            include_deleted_devices: Whether to include deleted devices
+            page_size: Number of items per page (default: 100)
+            
+        Returns:
+            List[Dict]: All backup usage data from all pages
+        """
+        return self._get_all_with_cursor(
+            self.query_backup_usage,
+            page_size=page_size,
+            include_deleted_devices=include_deleted_devices
+        )
+    
+    # Iterator versions for query endpoints (memory-efficient)
+    
+    def iter_query_windows_services(self, device_filter: Optional[str] = None, name: Optional[str] = None,
+                                   state: Optional[str] = None, page_size: int = 100) -> Iterator[Dict]:
+        """
+        Iterate through ALL Windows services one at a time using automatic cursor-based pagination.
+        Memory-efficient for processing large datasets.
+        """
+        yield from self._paginate_with_cursor(
+            self.query_windows_services, 
+            page_size=page_size,
+            device_filter=device_filter,
+            name=name,
+            state=state
+        )
+    
+    def iter_query_custom_fields(self, device_filter: Optional[str] = None, updated_after: Optional[str] = None,
+                                fields: Optional[str] = None, show_secure_values: Optional[bool] = None,
+                                page_size: int = 100) -> Iterator[Dict]:
+        """
+        Iterate through ALL custom fields one at a time using automatic cursor-based pagination.
+        Memory-efficient for processing large datasets.
+        """
+        yield from self._paginate_with_cursor(
+            self.query_custom_fields,
+            page_size=page_size,
+            device_filter=device_filter,
+            updated_after=updated_after,
+            fields=fields,
+            show_secure_values=show_secure_values
+        )
 
     def iter_organizations(self, page_size: int = 100) -> Iterator[Dict]:
         """
@@ -2993,6 +3377,143 @@ class NinjaRMMClient:
 
     # Enhanced organization and location management
     # Note: delete_organization method already exists earlier in the class
+
+    def _paginate_with_after(
+        self, 
+        method_func: Callable, 
+        page_size: int = 100, 
+        **kwargs: Any
+    ) -> Generator[Dict, None, None]:
+        """
+        Generic pagination helper for endpoints that use 'after' parameter.
+        
+        Args:
+            method_func: The method to call for each page
+            page_size: Number of items per page
+            **kwargs: Additional arguments to pass to the method
+            
+        Yields:
+            Dict: Each item from the paginated results
+        """
+        after = None
+        
+        while True:
+            logger.info(f"Fetching page with page_size={page_size}, after={after}")
+            
+            # Call the method with current pagination parameters
+            page_results = method_func(page_size=page_size, after=after, **kwargs)
+            
+            # If no results, we're done
+            if not page_results:
+                break
+                
+            # Yield each item from this page
+            for item in page_results:
+                yield item
+            
+            # If we got fewer results than page_size, we're done
+            if len(page_results) < page_size:
+                break
+                
+            # Get the last ID for the next page
+            after = page_results[-1].get('id')
+            if after is None:
+                logger.warning("No 'id' field found in last item, pagination may not work correctly")
+                break
+
+    def _paginate_with_cursor(
+        self, 
+        method_func: Callable, 
+        page_size: int = 100, 
+        **kwargs: Any
+    ) -> Generator[Dict, None, None]:
+        """
+        Generic pagination helper for endpoints that use 'cursor' parameter.
+        
+        Args:
+            method_func: The method to call for each page
+            page_size: Number of items per page
+            **kwargs: Additional arguments to pass to the method
+            
+        Yields:
+            Dict: Each item from the paginated results
+        """
+        cursor = None
+        
+        while True:
+            logger.info(f"Fetching page with page_size={page_size}, cursor={cursor}")
+            
+            # Call the method with current pagination parameters
+            response = method_func(page_size=page_size, cursor=cursor, **kwargs)
+            
+            # Handle the response structure for cursor-based endpoints
+            if not isinstance(response, dict):
+                logger.error("Expected dict response for cursor-based pagination")
+                break
+                
+            # Get the results from the response
+            results = response.get('results', [])
+            if not results:
+                break
+                
+            # Yield each item from this page
+            for item in results:
+                yield item
+            
+            # Get cursor information for next page
+            cursor_info = response.get('cursor', {})
+            
+            # Check if we have more pages
+            if not cursor_info:
+                break
+                
+            # Get the cursor name for the next page
+            cursor = cursor_info.get('name')
+            if not cursor:
+                break
+                
+            # If count is less than page_size, we might be done
+            count = cursor_info.get('count', 0)
+            if count < page_size:
+                logger.info(f"Received {count} items, less than page_size {page_size}, likely last page")
+
+    def _get_all_with_after(
+        self, 
+        method_func: Callable, 
+        page_size: int = 100, 
+        **kwargs: Any
+    ) -> List[Dict]:
+        """
+        Get all items from an endpoint that uses 'after' pagination.
+        
+        Args:
+            method_func: The method to call for each page
+            page_size: Number of items per page
+            **kwargs: Additional arguments to pass to the method
+            
+        Returns:
+            List[Dict]: All items from all pages
+        """
+        return list(self._paginate_with_after(method_func, page_size=page_size, **kwargs))
+
+    def _get_all_with_cursor(
+        self, 
+        method_func: Callable, 
+        page_size: int = 100, 
+        **kwargs: Any
+    ) -> List[Dict]:
+        """
+        Get all items from an endpoint that uses 'cursor' pagination.
+        
+        Args:
+            method_func: The method to call for each page
+            page_size: Number of items per page
+            **kwargs: Additional arguments to pass to the method
+            
+        Returns:
+            List[Dict]: All items from all pages
+        """
+        return list(self._paginate_with_cursor(method_func, page_size=page_size, **kwargs))
 
  
     

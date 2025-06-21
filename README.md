@@ -13,6 +13,7 @@ A comprehensive Python API client for NinjaRMM (NinjaOne) with support for all m
 - **Type Safety**: Full type hints and runtime type checking
 - **Error Handling**: Comprehensive exception handling with detailed error messages
 - **Rate Limiting**: Built-in retry logic and rate limit handling
+- **Timestamp Conversion**: Automatic conversion of epoch timestamps to ISO datetime format
 - **Async Ready**: Designed with future async support in mind
 
 ## Installation
@@ -161,6 +162,60 @@ condition = client.create_custom_fields_policy_condition(
 )
 ```
 
+### Auto-Pagination Features
+
+The NinjaRMM API supports two types of pagination, and this client automatically handles both:
+
+#### Standard Pagination (with `after` parameter)
+
+```python
+# Get ALL organizations automatically (handles pagination)
+all_orgs = client.get_all_organizations(page_size=100)
+print(f"Retrieved {len(all_orgs)} organizations total")
+
+# Get ALL devices automatically 
+all_devices = client.get_all_devices(page_size=50)
+print(f"Retrieved {len(all_devices)} devices total")
+
+# Memory-efficient iteration (doesn't load all into memory)
+for org in client.iter_all_organizations(page_size=100):
+    print(f"Processing org: {org['name']}")
+```
+
+#### Cursor-Based Pagination (for `/v2/queries` endpoints)
+
+```python
+# Query ALL Windows services across all devices
+all_services = client.query_all_windows_services(
+    device_filter="deviceClass eq 'WINDOWS_WORKSTATION'",
+    page_size=100
+)
+print(f"Found {len(all_services)} Windows services")
+
+# Search ALL devices matching criteria
+search_results = client.search_all_devices(
+    query="Windows Server",
+    page_size=25
+)
+print(f"Found {len(search_results)} matching devices")
+
+# Get ALL custom fields with automatic pagination
+custom_fields = client.query_all_custom_fields(page_size=50)
+print(f"Retrieved {len(custom_fields)} custom field entries")
+```
+
+#### Available Auto-Pagination Methods
+
+**Standard Pagination:**
+- `get_all_organizations()`, `get_all_devices()`, `get_all_devices_detailed()`
+- `iter_all_organizations()`, `iter_all_devices()` (memory-efficient iterators)
+
+**Cursor-Based Pagination:**
+- `search_all_devices()`, `get_all_device_activities()`, `get_all_activities()`
+- `query_all_windows_services()`, `query_all_os_patches()`, `query_all_custom_fields()`
+- `query_all_software()`, `query_all_backup_usage()` and more...
+- Iterator versions: `iter_query_windows_services()`, `iter_query_custom_fields()`
+
 ### Error Handling
 
 ```python
@@ -304,6 +359,78 @@ client = NinjaRMMClient(
 ```
 
 ## Advanced Usage
+
+### Timestamp Conversion
+
+By default, the library automatically converts epoch timestamps to ISO 8601 datetime format for better readability:
+
+```python
+# Automatic timestamp conversion (enabled by default)
+client = NinjaRMMClient(
+    token_url="https://app.ninjarmm.com/oauth/token",
+    client_id="your_client_id", 
+    client_secret="your_client_secret",
+    scope="monitoring management control",
+    convert_timestamps=True  # Default behavior
+)
+
+devices = client.get_devices()
+device = devices[0]
+
+# Timestamps are automatically converted:
+print(device['created'])      # "2024-10-09T14:52:21.725760Z" (ISO format)
+print(device['lastContact'])  # "2024-10-09T12:30:45Z" (ISO format)
+```
+
+**Disabling Timestamp Conversion:**
+
+```python
+# Keep raw epoch timestamps
+client = NinjaRMMClient(
+    token_url="https://app.ninjarmm.com/oauth/token",
+    client_id="your_client_id",
+    client_secret="your_client_secret", 
+    scope="monitoring management control",
+    convert_timestamps=False
+)
+
+devices = client.get_devices()
+device = devices[0]
+
+# Timestamps remain as epoch values:
+print(device['created'])      # 1728487941.725760 (epoch)
+print(device['lastContact'])  # 1728484345.0 (epoch)
+```
+
+**Dynamic Control:**
+
+```python
+client = NinjaRMMClient(...)
+
+# Check current setting
+print(client.get_timestamp_conversion_status())  # True
+
+# Disable for raw timestamps
+client.set_timestamp_conversion(False)
+
+# Re-enable for ISO format
+client.set_timestamp_conversion(True)
+```
+
+**Manual Conversion Utilities:**
+
+```python
+from ninjapy.utils import convert_epoch_to_iso, is_timestamp_field
+
+# Convert individual timestamps
+iso_time = convert_epoch_to_iso(1728487941.725760)
+print(iso_time)  # "2024-10-09T14:52:21.725760Z"
+
+# Check if a field name looks like a timestamp
+is_timestamp_field("created")     # True
+is_timestamp_field("lastUpdate")  # True
+is_timestamp_field("name")        # False
+```
 
 ### Pagination
 

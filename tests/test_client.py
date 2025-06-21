@@ -251,6 +251,299 @@ class TestNinjaRMMClient:
                 assert isinstance(client, NinjaRMMClient)
                 assert hasattr(client, 'session')
 
+    def test_pagination_with_after_basic(self):
+        """Test basic pagination with 'after' parameter"""
+        # Mock responses for pagination
+        page1 = [{"id": 1, "name": "org1"}, {"id": 2, "name": "org2"}]
+        page2 = [{"id": 3, "name": "org3"}]
+        
+        with responses.RequestsMock() as rsps:
+            # First page
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page1,
+                status=200
+            )
+            # Second page
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page2,
+                status=200
+            )
+            
+            # Test get_all_organizations
+            all_orgs = self.client.get_all_organizations(page_size=2)
+            
+            # Should have all organizations from both pages
+            assert len(all_orgs) == 3
+            assert all_orgs[0]["id"] == 1
+            assert all_orgs[1]["id"] == 2
+            assert all_orgs[2]["id"] == 3
+            
+            # Check that the right parameters were used
+            assert len(rsps.calls) == 2  # Only 2 calls needed since second page had less than page_size
+            
+            # First call should have no 'after' parameter
+            assert "pageSize=2" in rsps.calls[0].request.url
+            assert "after=" not in rsps.calls[0].request.url
+            
+            # Second call should have after=2
+            assert "pageSize=2" in rsps.calls[1].request.url
+            assert "after=2" in rsps.calls[1].request.url
+
+    def test_pagination_with_cursor_basic(self):
+        """Test basic pagination with cursor"""
+        # Mock responses for cursor-based pagination
+        page1_response = {
+            "results": [
+                {"id": 1, "name": "device1"},
+                {"id": 2, "name": "device2"}
+            ],
+            "cursor": {
+                "name": "cursor1",
+                "offset": 0,
+                "count": 2,
+                "expires": 1750461858.667844000
+            }
+        }
+        
+        page2_response = {
+            "results": [
+                {"id": 3, "name": "device3"}
+            ],
+            "cursor": {
+                "name": "cursor2",
+                "offset": 2,
+                "count": 1,
+                "expires": 1750461858.667844000
+            }
+        }
+        
+        page3_response = {
+            "results": [],
+            "cursor": {}
+        }
+        
+        with responses.RequestsMock() as rsps:
+            # First page
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/devices/search",
+                json=page1_response,
+                status=200
+            )
+            # Second page
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/devices/search",
+                json=page2_response,
+                status=200
+            )
+            # Third page (empty)
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/devices/search",
+                json=page3_response,
+                status=200
+            )
+            
+            # Test search_all_devices
+            all_devices = self.client.search_all_devices("test", page_size=2)
+            
+            # Should have all devices from both pages
+            assert len(all_devices) == 3
+            assert all_devices[0]["id"] == 1
+            assert all_devices[1]["id"] == 2
+            assert all_devices[2]["id"] == 3
+            
+            # Check that the right parameters were used
+            assert len(rsps.calls) == 3
+            
+            # First call should have no cursor
+            assert "pageSize=2" in rsps.calls[0].request.url
+            assert "q=test" in rsps.calls[0].request.url
+            assert "cursor=" not in rsps.calls[0].request.url
+            
+            # Second call should have cursor=cursor1
+            assert "pageSize=2" in rsps.calls[1].request.url
+            assert "cursor=cursor1" in rsps.calls[1].request.url
+            
+            # Third call should have cursor=cursor2
+            assert "pageSize=2" in rsps.calls[2].request.url
+            assert "cursor=cursor2" in rsps.calls[2].request.url
+
+    def test_iter_all_organizations(self):
+        """Test iterator for organizations"""
+        # Mock responses
+        page1 = [{"id": 1, "name": "org1"}, {"id": 2, "name": "org2"}]
+        page2 = [{"id": 3, "name": "org3"}]
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page1,
+                status=200
+            )
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page2,
+                status=200
+            )
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=[],
+                status=200
+            )
+            
+            # Test iterator
+            orgs = list(self.client.iter_all_organizations(page_size=2))
+            
+            assert len(orgs) == 3
+            assert orgs[0]["id"] == 1
+            assert orgs[1]["id"] == 2
+            assert orgs[2]["id"] == 3
+
+    def test_query_all_with_filters(self):
+        """Test query methods with filters"""
+        response = {
+            "results": [
+                {"id": 1, "name": "service1", "state": "running"},
+                {"id": 2, "name": "service2", "state": "stopped"}
+            ],
+            "cursor": {}  # Empty cursor means no more pages
+        }
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/queries/windows-services",
+                json=response,
+                status=200
+            )
+            
+            # Test with filters
+            services = self.client.query_all_windows_services(
+                device_filter="deviceClass eq 'WINDOWS_WORKSTATION'",
+                name="test",
+                state="running",
+                page_size=50
+            )
+            
+            assert len(services) == 2
+            assert services[0]["id"] == 1
+            assert services[1]["id"] == 2
+            
+            # Check parameters
+            call = rsps.calls[0]
+            assert "pageSize=50" in call.request.url
+            assert "df=deviceClass%20eq%20%27WINDOWS_WORKSTATION%27" in call.request.url
+            assert "name=test" in call.request.url
+            assert "state=running" in call.request.url
+
+    def test_pagination_empty_response(self):
+        """Test pagination with empty response"""
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=[],
+                status=200
+            )
+            
+            # Should return empty list
+            orgs = self.client.get_all_organizations()
+            assert len(orgs) == 0
+            
+            # Should only make one call
+            assert len(rsps.calls) == 1
+
+    def test_pagination_single_page(self):
+        """Test pagination when all results fit in one page"""
+        page1 = [{"id": 1, "name": "org1"}, {"id": 2, "name": "org2"}]
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page1,
+                status=200
+            )
+            
+            # With page_size=10, should not need another call
+            orgs = self.client.get_all_organizations(page_size=10)
+            
+            assert len(orgs) == 2
+            assert len(rsps.calls) == 1  # Only one call needed
+
+    def test_pagination_with_missing_id(self):
+        """Test pagination behavior when ID field is missing"""
+        page1 = [{"name": "org1"}, {"name": "org2"}]  # Missing 'id' field
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/organizations",
+                json=page1,
+                status=200
+            )
+            
+            # Should still return the results but log warning and stop pagination
+            orgs = self.client.get_all_organizations(page_size=10)
+            
+            assert len(orgs) == 2
+            assert len(rsps.calls) == 1
+
+    def test_cursor_pagination_malformed_response(self):
+        """Test cursor pagination with malformed response"""
+        bad_response = {"not_results": []}  # Missing 'results' key
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/devices/search",
+                json=bad_response,
+                status=200
+            )
+            
+            # Should return empty list when response is malformed
+            devices = self.client.search_all_devices("test")
+            
+            assert len(devices) == 0
+            assert len(rsps.calls) == 1
+
+    def test_get_all_devices_with_params(self):
+        """Test get_all_devices with various parameters"""
+        page1 = [{"id": 1, "name": "device1"}, {"id": 2, "name": "device2"}]
+        
+        with responses.RequestsMock() as rsps:
+            rsps.add(
+                responses.GET,
+                f"{self.client.base_url}/v2/devices",
+                json=page1,
+                status=200
+            )
+            
+            devices = self.client.get_all_devices(
+                page_size=50,
+                org_filter="test_org",
+                expand="volumes",
+                include_backup_usage=True
+            )
+            
+            assert len(devices) == 2
+            
+            # Check all parameters were passed
+            call = rsps.calls[0]
+            assert "pageSize=50" in call.request.url
+            assert "of=test_org" in call.request.url
+            assert "expand=volumes" in call.request.url
+            assert "includeBackupUsage=true" in call.request.url
+
 
 class TestClientValidation:
     """Test cases for client input validation."""
@@ -276,6 +569,98 @@ class TestClientValidation:
                 with patch.object(client.token_manager, 'get_valid_token', return_value="test_token"):
                     client._request('GET', 'v2/test')
                     client._request('GET', '/v2/test')
+
+
+class TestTimestampConversion:
+    """Test cases for timestamp conversion feature."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        with patch('ninjapy.client.TokenManager') as mock_token_manager:
+            mock_token_manager.return_value.get_valid_token.return_value = "test_token"
+            
+            self.client = NinjaRMMClient(
+                token_url="https://test.com/token",
+                client_id="test",
+                client_secret="test",
+                scope="test",
+                base_url="https://test.com",
+                convert_timestamps=True
+            )
+    
+    @responses.activate
+    def test_timestamp_conversion_enabled(self):
+        """Test timestamp conversion when enabled."""
+        # Mock API response with epoch timestamps
+        mock_response = [
+            {
+                "id": 1,
+                "name": "Test Device",
+                "created": 1728487941.725760,
+                "lastContact": 1640995200,
+                "description": "Test device"
+            }
+        ]
+        
+        responses.add(
+            responses.GET,
+            "https://test.com/v2/devices",
+            json=mock_response,
+            status=200
+        )
+        
+        with patch.object(self.client.token_manager, 'get_valid_token', return_value="test_token"):
+            result = self.client.get_devices()
+        
+        device = result[0]
+        assert device["created"] == "2024-10-09T14:52:21.725760Z"
+        assert device["lastContact"] == "2022-01-01T00:00:00Z"
+        assert device["description"] == "Test device"  # Non-timestamp field unchanged
+    
+    @responses.activate 
+    def test_timestamp_conversion_disabled(self):
+        """Test timestamp conversion when disabled."""
+        # Create client with timestamp conversion disabled
+        with patch('ninjapy.client.TokenManager') as mock_token_manager:
+            mock_token_manager.return_value.get_valid_token.return_value = "test_token"
+            
+            client_no_conversion = NinjaRMMClient(
+                token_url="https://test.com/token",
+                client_id="test",
+                client_secret="test",
+                scope="test",
+                base_url="https://test.com",
+                convert_timestamps=False
+            )
+        
+        mock_response = [
+            {
+                "id": 1,
+                "created": 1728487941.725760
+            }
+        ]
+        
+        responses.add(
+            responses.GET,
+            "https://test.com/v2/devices",
+            json=mock_response,
+            status=200
+        )
+        
+        result = client_no_conversion.get_devices()
+        
+        # Should return original timestamp values
+        assert result[0]["created"] == 1728487941.725760
+    
+    def test_set_timestamp_conversion(self):
+        """Test setting timestamp conversion dynamically."""
+        assert self.client.get_timestamp_conversion_status() is True
+        
+        self.client.set_timestamp_conversion(False)
+        assert self.client.get_timestamp_conversion_status() is False
+        
+        self.client.set_timestamp_conversion(True)
+        assert self.client.get_timestamp_conversion_status() is True
 
 
 class TestClientErrorHandling:
