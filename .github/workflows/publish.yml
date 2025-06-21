@@ -1,13 +1,7 @@
 name: Build and Publish
 
+# Temporarily disabled
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       publish_to:
@@ -19,6 +13,13 @@ on:
         - test
         - prod
         - none
+  # push:
+  #   branches: [ main ]
+  #   tags: [ 'v*' ]
+  # pull_request:
+  #   branches: [ main ]
+  # release:
+  #   types: [published]
 
 jobs:
   test:
