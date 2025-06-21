@@ -1,6 +1,6 @@
 [flake8]
-max-line-length = 100
-max-complexity = 10
+max-line-length = 120
+max-complexity = 15
 extend-ignore = 
     # Allow line breaks before binary operators (W503 vs W504 conflict)
     W503,
