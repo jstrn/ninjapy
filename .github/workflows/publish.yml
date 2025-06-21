@@ -91,7 +91,7 @@ jobs:
         python -c "import ninjapy; print(f'Successfully imported ninjapy v{ninjapy.__version__}')"
 
     - name: Upload build artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: dist
         path: dist/
@@ -110,10 +110,11 @@ jobs:
 
     steps:
     - name: Download build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: dist
         path: dist/
+        pattern: dist/*
+        merge-multiple: true
 
     - name: Publish to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -142,10 +143,11 @@ jobs:
 
     steps:
     - name: Download build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: dist
         path: dist/
+        pattern: dist/*
+        merge-multiple: true
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -170,10 +172,11 @@ jobs:
         fetch-depth: 0
 
     - name: Download build artifacts
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
       with:
-        name: dist
         path: dist/
+        pattern: dist/*
+        merge-multiple: true
 
     - name: Generate changelog
       id: changelog
