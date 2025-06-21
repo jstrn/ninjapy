@@ -135,7 +135,7 @@ class TokenManager:
         }
 
         try:
-            response = requests.post(self.token_url, data=data)
+            response = requests.post(self.token_url, data=data, timeout=30)
             response.raise_for_status()
             token_data = response.json()
 
