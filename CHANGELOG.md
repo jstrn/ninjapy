@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2025-06-21
+
+### Added
+- 
+
+### Changed
+- 
+
+### Fixed
+- 
+
 ### Added
 - Preparation for PyPI publishing
 - Comprehensive test suite
