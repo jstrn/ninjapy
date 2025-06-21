@@ -66,6 +66,7 @@ class TestPublishingScripts:
         assert result.returncode == 0
         assert "Bump package version" in result.stdout
 
+    @pytest.mark.skipif(os.name == "nt", reason="Skip bash scripts on Windows")
     def test_release_script_help(self):
         """Test that release script shows help."""
         result = subprocess.run(
@@ -210,6 +211,7 @@ class TestIntegration:
         assert result.returncode == 0
         assert "DRY RUN" in result.stdout
 
+    @pytest.mark.skipif(os.name == "nt", reason="Skip bash scripts on Windows")
     def test_dry_run_release(self):
         """Test release script in dry run mode."""
         result = subprocess.run(

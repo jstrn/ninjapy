@@ -6,6 +6,7 @@ This script helps with version management, git tagging, and release preparation.
 """
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -21,21 +22,33 @@ class Colors:
     BOLD = '\033[1m'
     END = '\033[0m'
 
+# Use plain text on Windows to avoid Unicode issues
+if os.name == 'nt':
+    STEP_PREFIX = "[STEP]"
+    SUCCESS_PREFIX = "[OK]"
+    WARNING_PREFIX = "[WARN]"
+    ERROR_PREFIX = "[ERROR]"
+else:
+    STEP_PREFIX = "🔢"
+    SUCCESS_PREFIX = "✅"
+    WARNING_PREFIX = "⚠️"
+    ERROR_PREFIX = "❌"
+
 def print_step(message: str) -> None:
     """Print a step message with formatting."""
-    print(f"\n{Colors.BLUE}{Colors.BOLD}🔢 {message}{Colors.END}")
+    print(f"\n{Colors.BLUE}{Colors.BOLD}{STEP_PREFIX} {message}{Colors.END}")
 
 def print_success(message: str) -> None:
     """Print a success message with formatting."""
-    print(f"{Colors.GREEN}✅ {message}{Colors.END}")
+    print(f"{Colors.GREEN}{SUCCESS_PREFIX} {message}{Colors.END}")
 
 def print_warning(message: str) -> None:
     """Print a warning message with formatting."""
-    print(f"{Colors.YELLOW}⚠️  {message}{Colors.END}")
+    print(f"{Colors.YELLOW}{WARNING_PREFIX} {message}{Colors.END}")
 
 def print_error(message: str) -> None:
     """Print an error message with formatting."""
-    print(f"{Colors.RED}❌ {message}{Colors.END}")
+    print(f"{Colors.RED}{ERROR_PREFIX} {message}{Colors.END}")
 
 def run_command(cmd: list, capture_output: bool = True, check: bool = True) -> subprocess.CompletedProcess:
     """Run a command and return the result."""

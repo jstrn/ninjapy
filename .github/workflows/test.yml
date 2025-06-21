@@ -68,6 +68,8 @@ jobs:
     - name: Test with pytest
       run: |
         pytest -v --cov=ninjapy --cov-report=term-missing --cov-report=xml
+      env:
+        PYTHONIOENCODING: utf-8
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
