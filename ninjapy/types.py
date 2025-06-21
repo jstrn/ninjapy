@@ -1,18 +1,36 @@
-from typing import TypedDict, List, Optional, Literal, Dict, Any
+from typing import Any, Dict, List, Literal, Optional, TypedDict
+
 
 class CustomFieldCondition(TypedDict):
     fieldName: str
-    operator: Literal["EQUALS", "NOT_EQUALS", "LESS_THAN", "LESS_OR_EQUAL_THAN",
-                     "GREATER_THAN", "GREATER_OR_EQUAL_THAN", "IS_NOT_NULL",
-                     "CONTAINS", "CONTAINS_NONE", "CONTAINS_ANY"]
+    operator: Literal[
+        "EQUALS",
+        "NOT_EQUALS",
+        "LESS_THAN",
+        "LESS_OR_EQUAL_THAN",
+        "GREATER_THAN",
+        "GREATER_OR_EQUAL_THAN",
+        "IS_NOT_NULL",
+        "CONTAINS",
+        "CONTAINS_NONE",
+        "CONTAINS_ANY",
+    ]
     value: str
+
 
 class PolicyConditionScript(TypedDict):
     scriptId: int
-    runAs: Literal["SYSTEM", "LOGGED_ON_USER", "LOCAL_ADMIN", "DOMAIN_ADMIN",
-                   "PREFERRED_CREDENTIAL_MAC", "PREFERRED_CREDENTIAL_LINUX"]
+    runAs: Literal[
+        "SYSTEM",
+        "LOGGED_ON_USER",
+        "LOCAL_ADMIN",
+        "DOMAIN_ADMIN",
+        "PREFERRED_CREDENTIAL_MAC",
+        "PREFERRED_CREDENTIAL_LINUX",
+    ]
     scriptParam: Optional[str]
-    scriptVariables: List[dict] 
+    scriptVariables: List[dict]
+
 
 class Organization(TypedDict):
     id: int
@@ -21,6 +39,7 @@ class Organization(TypedDict):
     nodeApprovalMode: Optional[str]
     tags: Optional[List[str]]
     fields: Optional[Dict[str, Any]]
+
 
 class Device(TypedDict):
     id: int
@@ -37,9 +56,10 @@ class Device(TypedDict):
     lastContact: float
     lastUpdate: float
 
+
 class NotificationChannel(TypedDict):
     id: int
     name: str
     description: Optional[str]
     enabled: bool
-    type: str 
+    type: str

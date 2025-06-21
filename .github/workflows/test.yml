@@ -60,7 +60,7 @@ jobs:
         # Stop the build if there are Python syntax errors or undefined names
         flake8 ninjapy tests --count --select=E9,F63,F7,F82 --show-source --statistics
         # Exit-zero treats all errors as warnings
-        flake8 ninjapy tests --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+        flake8 ninjapy tests --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
 
     - name: Format check with black
       run: |

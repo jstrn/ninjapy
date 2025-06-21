@@ -1,0 +1,27 @@
+[flake8]
+max-line-length = 100
+max-complexity = 10
+extend-ignore = 
+    # Allow line breaks before binary operators (W503 vs W504 conflict)
+    W503,
+    # Allow lambda expressions 
+    E731
+exclude = 
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    env,
+    .env,
+    dist,
+    build,
+    *.egg-info,
+    .tox,
+    .coverage,
+    htmlcov,
+    test_env
+per-file-ignores =
+    # Tests can have longer lines for readability
+    tests/*:E501
+    # Allow unused imports in __init__.py files
+    __init__.py:F401 
