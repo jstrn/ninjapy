@@ -95,6 +95,11 @@ class NinjaRMMClient:
         scope: str,
         base_url: str = "https://app.ninjarmm.com",
         convert_timestamps: bool = True,
+        request_timeout: int = 10,
+        retry_total: int = 3,
+        retry_backoff_factor: float = 1.0,
+        retry_status_forcelist: Optional[List[int]] = None,
+        rate_limit_default_retry_after: int = 10,
     ) -> None:
         """
         Initialize the NinjaRMM API client.
@@ -107,9 +112,21 @@ class NinjaRMMClient:
             base_url: Base URL for the API. Defaults to https://api.ninjarmm.com
             convert_timestamps: Whether to automatically convert epoch timestamps
                 to ISO format. Defaults to True.
+            request_timeout: Timeout for HTTP requests in seconds. Defaults to 10.
+            retry_total: Total number of retries for failed requests. Defaults to 3.
+            retry_backoff_factor: Factor for exponential backoff between retries. Defaults to 1.0.
+            retry_status_forcelist: List of HTTP status codes to retry on. 
+                Defaults to [429, 500, 502, 503, 504].
+            rate_limit_default_retry_after: Default retry-after time when rate limited
+                and no Retry-After header is provided. Defaults to 10 seconds.
         """
         self.base_url = base_url.rstrip("/")
         self.convert_timestamps = convert_timestamps
+        self.request_timeout = request_timeout
+        self.retry_total = retry_total
+        self.retry_backoff_factor = retry_backoff_factor
+        self.retry_status_forcelist = retry_status_forcelist or [429, 500, 502, 503, 504]
+        self.rate_limit_default_retry_after = rate_limit_default_retry_after
         self.token_manager = TokenManager(token_url, client_id, client_secret, scope)
         self.session = requests.Session()
         self.session.headers.update(
@@ -118,9 +135,9 @@ class NinjaRMMClient:
 
         # Configure retries with exponential backoff
         retries = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
+            total=self.retry_total,
+            backoff_factor=self.retry_backoff_factor,
+            status_forcelist=self.retry_status_forcelist,
             allowed_methods=[
                 "HEAD",
                 "GET",
@@ -176,14 +193,14 @@ class NinjaRMMClient:
         try:
             logger.info("Sending HTTP request now...")
             # Explicitly set a timeout to prevent indefinite hangs
-            response = self.session.request(method, url, timeout=10, **kwargs)
+            response = self.session.request(method, url, timeout=self.request_timeout, **kwargs)
             logger.info(
                 f"HTTP request completed with status code: " f"{response.status_code}"
             )
 
             # Handle rate limiting explicitly
             if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", 10))
+                retry_after = int(response.headers.get("Retry-After", self.rate_limit_default_retry_after))
                 logger.warning(f"Rate limited. Retrying after {retry_after} seconds.")
                 time.sleep(retry_after)
                 return self._request(method, endpoint, **kwargs)
