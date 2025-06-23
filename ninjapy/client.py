@@ -115,7 +115,7 @@ class NinjaRMMClient:
             request_timeout: Timeout for HTTP requests in seconds. Defaults to 10.
             retry_total: Total number of retries for failed requests. Defaults to 3.
             retry_backoff_factor: Factor for exponential backoff between retries. Defaults to 1.0.
-            retry_status_forcelist: List of HTTP status codes to retry on. 
+            retry_status_forcelist: List of HTTP status codes to retry on.
                 Defaults to [429, 500, 502, 503, 504].
             rate_limit_default_retry_after: Default retry-after time when rate limited
                 and no Retry-After header is provided. Defaults to 10 seconds.
@@ -125,7 +125,13 @@ class NinjaRMMClient:
         self.request_timeout = request_timeout
         self.retry_total = retry_total
         self.retry_backoff_factor = retry_backoff_factor
-        self.retry_status_forcelist = retry_status_forcelist or [429, 500, 502, 503, 504]
+        self.retry_status_forcelist = retry_status_forcelist or [
+            429,
+            500,
+            502,
+            503,
+            504,
+        ]
         self.rate_limit_default_retry_after = rate_limit_default_retry_after
         self.token_manager = TokenManager(token_url, client_id, client_secret, scope)
         self.session = requests.Session()
@@ -193,14 +199,20 @@ class NinjaRMMClient:
         try:
             logger.info("Sending HTTP request now...")
             # Explicitly set a timeout to prevent indefinite hangs
-            response = self.session.request(method, url, timeout=self.request_timeout, **kwargs)
+            response = self.session.request(
+                method, url, timeout=self.request_timeout, **kwargs
+            )
             logger.info(
                 f"HTTP request completed with status code: " f"{response.status_code}"
             )
 
             # Handle rate limiting explicitly
             if response.status_code == 429:
-                retry_after = int(response.headers.get("Retry-After", self.rate_limit_default_retry_after))
+                retry_after = int(
+                    response.headers.get(
+                        "Retry-After", self.rate_limit_default_retry_after
+                    )
+                )
                 logger.warning(f"Rate limited. Retrying after {retry_after} seconds.")
                 time.sleep(retry_after)
                 return self._request(method, endpoint, **kwargs)
