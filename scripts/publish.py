@@ -191,66 +191,38 @@ def check_package() -> None:
     print_success("Package check completed")
 
 def publish_package(repository: str) -> None:
-    """Publish the package to a repository."""
+    """Publish the package to a repository using .pypirc configuration."""
     if repository == "test":
-        repo_url = "https://test.pypi.org/legacy/"
         repo_name = "TestPyPI"
-        env_var = "TEST_PYPI_API_TOKEN"
+        repo_flag = "testpypi"
     else:
-        repo_url = "https://upload.pypi.org/legacy/"
         repo_name = "PyPI"
-        env_var = "PYPI_API_TOKEN"
-    
+        repo_flag = "pypi"
+
     print_step(f"Publishing to {repo_name}")
-    
-    # Check for API token
-    api_token = os.getenv(env_var)
-    if not api_token:
-        print_warning(f"No {env_var} environment variable found")
-        api_token = input(f"Enter your {repo_name} API token: ").strip()
-        if not api_token:
-            print_error("No API token provided")
-            sys.exit(1)
-    
-    # Publish
-    cmd = [
-        sys.executable, "-m", "twine", "upload",
-        "--repository-url", repo_url,
-        "--username", "__token__",
-        "--password", api_token,
-        "dist/*"
-    ]
-    
-    run_command(cmd)
-    print_success(f"Published to {repo_name}")
-    
-    # Test installation
-    if repository == "test":
-        print("Waiting for package to be available on TestPyPI...")
-        time.sleep(30)
-        try:
-            run_command([
-                sys.executable, "-m", "pip", "install", 
-                "--index-url", "https://test.pypi.org/simple/",
-                "--extra-index-url", "https://pypi.org/simple/",
-                "--force-reinstall",
-                "ninjapy"
-            ])
-            print_success("Test installation from TestPyPI successful")
-        except subprocess.CalledProcessError:
-            print_warning("Test installation from TestPyPI failed")
-    else:
-        print("Waiting for package to be available on PyPI...")
-        time.sleep(60)
-        try:
-            run_command([
-                sys.executable, "-m", "pip", "install", 
-                "--force-reinstall",
-                "ninjapy"
-            ])
-            print_success("Test installation from PyPI successful")
-        except subprocess.CalledProcessError:
-            print_warning("Test installation from PyPI failed")
+    print_warning(
+        f"This will upload the package using the '{repo_flag}' repository "
+        f"configured in your ~/.pypirc file."
+    )
+
+    if not input("Continue? (y/N): ").lower().startswith("y"):
+        print("Publishing cancelled.")
+        sys.exit(0)
+
+    # The --repository flag tells twine to use the configuration
+    # from the ~/.pypirc file. Twine will handle prompting for
+    # credentials if they are not found.
+    cmd = [sys.executable, "-m", "twine", "upload", "--repository", repo_flag, "dist/*"]
+
+    try:
+        run_command(cmd)
+        print_success(f"Package successfully published to {repo_name}")
+    except subprocess.CalledProcessError:
+        print_error(f"Failed to publish to {repo_name}")
+        print_warning(
+            f"Please ensure the '{repo_flag}' repository is correctly configured in your ~/.pypirc file."
+        )
+        sys.exit(1)
 
 def main():
     """Main entry point."""
