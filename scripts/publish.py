@@ -152,21 +152,42 @@ def build_package() -> None:
 def check_package() -> None:
     """Check the built package."""
     print_step("Checking package")
-    
-    # Check with twine
+
+    # Check with twine - twine handles the glob pattern
     run_command([sys.executable, "-m", "twine", "check", "dist/*"])
-    
+
     # Test installation
     print("Testing package installation...")
-    run_command([sys.executable, "-m", "pip", "install", "--force-reinstall", "dist/*.whl"])
-    
+    try:
+        # We need to manually glob for pip, as it doesn't expand the wildcard
+        # when not run in a shell.
+        dist_dir = Path("dist")
+        wheel_file = next(dist_dir.glob("*.whl"))
+        run_command(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                str(wheel_file),
+            ]
+        )
+    except StopIteration:
+        print_error("Could not find a wheel file in dist/ to test installation.")
+        sys.exit(1)
+
     # Test import
-    result = run_command([
-        sys.executable, "-c", 
-        "import ninjapy; print(f'Successfully imported ninjapy v{ninjapy.__version__}')"
-    ], capture_output=True)
+    result = run_command(
+        [
+            sys.executable,
+            "-c",
+            "import ninjapy; print(f'Successfully imported ninjapy v{ninjapy.__version__}')",
+        ],
+        capture_output=True,
+    )
     print(result.stdout.strip())
-    
+
     print_success("Package check completed")
 
 def publish_package(repository: str) -> None:
