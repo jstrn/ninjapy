@@ -519,13 +519,13 @@ This is an unofficial Python client for the NinjaRMM (NinjaOne) API. It is not a
 
 ## Support
 
-- 📖 [Documentation](https://github.com/yourusername/ninjapy#readme)
-- 🐛 [Bug Reports](https://github.com/yourusername/ninjapy/issues)
-- 💡 [Feature Requests](https://github.com/yourusername/ninjapy/issues)
+- 📖 [Documentation](https://github.com/jstrn/ninjapy#readme)
+- 🐛 [Bug Reports](https://github.com/jstrn/ninjapy/issues)
+- 💡 [Feature Requests](https://github.com/jstrn/ninjapy/issues)
 - 📝 [Changelog](CHANGELOG.md)
 
 ## Links
 
 - [NinjaRMM Official Documentation](https://app.ninjarmm.com/apidocs)
 - [PyPI Package](https://pypi.org/project/ninjapy/)
-- [GitHub Repository](https://github.com/yourusername/ninjapy) 
+- [GitHub Repository](https://github.com/jstrn/ninjapy) 
