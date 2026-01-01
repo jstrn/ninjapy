@@ -48,27 +48,28 @@ format:
 	isort ninjapy tests
 
 # Security checks
+# Note: vet may be installed via Homebrew in /home/linuxbrew/.linuxbrew/bin
+VET := $(shell command -v vet 2>/dev/null || echo "/home/linuxbrew/.linuxbrew/bin/vet")
+
 security:
 	bandit -r ninjapy
-	@if ! command -v vet >/dev/null 2>&1; then \
-		echo "vet not found, installing..."; \
-		curl -sSL https://github.com/safedep/vet/releases/latest/download/vet_linux_amd64.tar.gz | tar -xz -C /tmp; \
-		sudo mv /tmp/vet /usr/local/bin/vet; \
-		echo "vet installed successfully"; \
+	@if [ -x "$(VET)" ]; then \
+		$(VET) scan -D .; \
+	else \
+		echo "vet not found. Install with: brew install safedep/tap/vet"; \
+		exit 1; \
 	fi
-	vet scan -D .
 
 # Install vet from SafeDep (https://github.com/safedep/vet)
 install-vet:
-	@if command -v vet >/dev/null 2>&1; then \
+	@if [ -x "$(VET)" ]; then \
 		echo "vet is already installed:"; \
-		vet version; \
+		$(VET) version; \
 	else \
-		echo "Installing SafeDep vet..."; \
-		curl -sSL https://github.com/safedep/vet/releases/latest/download/vet_linux_amd64.tar.gz | tar -xz -C /tmp; \
-		sudo mv /tmp/vet /usr/local/bin/vet; \
+		echo "Installing SafeDep vet via Homebrew..."; \
+		brew install safedep/tap/vet; \
 		echo "vet installed successfully"; \
-		vet version; \
+		/home/linuxbrew/.linuxbrew/bin/vet version; \
 	fi
 
 # Build targets
