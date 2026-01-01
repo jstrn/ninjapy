@@ -2247,7 +2247,7 @@ class NinjaRMMClient:
         response.raise_for_status()
         return response.json()
 
-    def get_location(self, org_id: int) -> List[Dict]:
+    def get_locations_by_organization_id(self, org_id: int) -> List[Dict]:
         """Get all locations for an organization
 
         Args:
@@ -2256,10 +2256,9 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: List of location objects
         """
-        url = f"{self.base_url}/v2/organization/{org_id}/locations"
-        response = self.session.get(url)
-        response.raise_for_status()
-        return response.json()
+        return self._request(
+            "GET", f"/v2/organization/{org_id}/locations"
+        )
 
     def get_locations(self) -> List[Dict]:
         """Get all locations for an organization
@@ -2268,10 +2267,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: List of location objects
         """
-        url = f"{self.base_url}/v2/locations"
-        response = self.session.get(url)
-        response.raise_for_status()
-        return response.json()
+        return self._request("GET", "/v2/locations")
 
     def update_location(
         self,
