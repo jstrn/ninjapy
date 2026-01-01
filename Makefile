@@ -1,6 +1,6 @@
 # Makefile for ninjapy development and publishing
 
-.PHONY: help install install-dev test lint format clean build publish-test publish-prod check-package docs
+.PHONY: help install install-dev test lint format clean build publish-test publish-prod check-package docs security install-vet
 
 # Default target
 help:
@@ -19,6 +19,8 @@ help:
 	@echo "  publish-prod   Publish to PyPI (interactive)"
 	@echo "  docs           Build documentation"
 	@echo "  version        Show current version"
+	@echo "  security       Run security checks (bandit + vet)"
+	@echo "  install-vet    Install SafeDep vet tool"
 
 # Installation targets
 install:
@@ -48,7 +50,26 @@ format:
 # Security checks
 security:
 	bandit -r ninjapy
-	safety check
+	@if ! command -v vet >/dev/null 2>&1; then \
+		echo "vet not found, installing..."; \
+		curl -sSL https://github.com/safedep/vet/releases/latest/download/vet_linux_amd64.tar.gz | tar -xz -C /tmp; \
+		sudo mv /tmp/vet /usr/local/bin/vet; \
+		echo "vet installed successfully"; \
+	fi
+	vet scan -D .
+
+# Install vet from SafeDep (https://github.com/safedep/vet)
+install-vet:
+	@if command -v vet >/dev/null 2>&1; then \
+		echo "vet is already installed:"; \
+		vet version; \
+	else \
+		echo "Installing SafeDep vet..."; \
+		curl -sSL https://github.com/safedep/vet/releases/latest/download/vet_linux_amd64.tar.gz | tar -xz -C /tmp; \
+		sudo mv /tmp/vet /usr/local/bin/vet; \
+		echo "vet installed successfully"; \
+		vet version; \
+	fi
 
 # Build targets
 clean:

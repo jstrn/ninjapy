@@ -1,3 +1,5 @@
+from importlib.metadata import version
+
 from .client import NinjaRMMClient
 from .exceptions import NinjaRMMAuthError, NinjaRMMError
 from .utils import (
@@ -8,7 +10,7 @@ from .utils import (
     process_api_response,
 )
 
-__version__ = "0.1.1"
+__version__ = version("ninjapy")
 __all__ = [
     "NinjaRMMClient",
     "NinjaRMMError",

@@ -28,3 +28,10 @@ class InstallerType(str, Enum):
     MAC_PKG = "MAC_PKG"
     LINUX_DEB = "LINUX_DEB"
     LINUX_RPM = "LINUX_RPM"
+
+
+class TagMergeMethod(str, Enum):
+    """Method for merging asset tags."""
+
+    MERGE_INTO_EXISTING_TAG = "MERGE_INTO_EXISTING_TAG"
+    MERGE_INTO_NEW_TAG = "MERGE_INTO_NEW_TAG"

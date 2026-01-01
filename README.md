@@ -234,7 +234,7 @@ except Exception as e:
 
 ## API Coverage
 
-### ✅ Fully Implemented (70%+)
+### ✅ Fully Implemented (75%+)
 
 - **Organizations**: CRUD operations, locations, policies, custom fields
 - **Devices**: CRUD, maintenance, patch management, scripting, custom fields
@@ -244,6 +244,7 @@ except Exception as e:
 - **Alerts**: Alert management and reset functionality
 - **Webhooks**: Configuration and management
 - **Document Management**: Basic document operations
+- **Asset Tags**: Full tag management (create, update, delete, merge, batch operations)
 
 ### 🚧 Partially Implemented
 
@@ -252,7 +253,6 @@ except Exception as e:
 
 ### ⏳ Planned for Future Releases
 
-- **Tag Management**: Asset tagging system
 - **Knowledge Base**: Article and folder management
 - **Checklists**: Template and organization checklist management 
 - **Related Items**: Entity relationships and attachments

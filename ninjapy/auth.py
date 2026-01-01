@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 from typing import Optional
 
@@ -36,6 +37,7 @@ class TokenManager:
         self._access_token: Optional[str] = None
         self._refresh_token_value: Optional[str] = None
         self._token_expiry: Optional[float] = None
+        self._token_lock = threading.Lock()
 
     def _is_token_expired(self) -> bool:
         """
@@ -158,36 +160,41 @@ class TokenManager:
         Raises:
             NinjaRMMAuthError: If unable to obtain valid token
         """
-        logger.info("Getting valid token")
-        try:
-            if not self._access_token or not self._token_expiry:
-                logger.info("No token exists, getting new one")
-                # No token exists, get new one
-                return self._get_new_access_token()
-
-            if self._is_token_expired():
-                logger.info("Token is expired")
-                # Token is expired
-                if self._refresh_token_value:
-                    logger.info("Attempting to refresh token")
-                    try:
-                        return self._refresh_token()
-                    except NinjaRMMAuthError:
-                        logger.info("Refresh failed, getting new token")
-                        # If refresh fails, try getting new token
-                        return self._get_new_access_token()
-                else:
-                    logger.info("No refresh token, getting new access token")
-                    # No refresh token, get new access token
-                    return self._get_new_access_token()
-
-            # Token is still valid
-            logger.info("Using existing valid token")
+        # Quick check without lock for performance
+        if self._access_token and not self._is_token_expired():
             return self._access_token
 
-        except Exception as e:
-            logger.error(f"Token management failed: {str(e)}")
-            raise NinjaRMMAuthError(f"Token management failed: {str(e)}")
+        with self._token_lock:
+            logger.info("Getting valid token")
+            try:
+                if not self._access_token or not self._token_expiry:
+                    logger.info("No token exists, getting new one")
+                    # No token exists, get new one
+                    return self._get_new_access_token()
+
+                if self._is_token_expired():
+                    logger.info("Token is expired")
+                    # Token is expired
+                    if self._refresh_token_value:
+                        logger.info("Attempting to refresh token")
+                        try:
+                            return self._refresh_token()
+                        except NinjaRMMAuthError:
+                            logger.info("Refresh failed, getting new token")
+                            # If refresh fails, try getting new token
+                            return self._get_new_access_token()
+                    else:
+                        logger.info("No refresh token, getting new access token")
+                        # No refresh token, get new access token
+                        return self._get_new_access_token()
+
+                # Token is still valid
+                logger.info("Using existing valid token")
+                return self._access_token
+
+            except Exception as e:
+                logger.error(f"Token management failed: {str(e)}")
+                raise NinjaRMMAuthError(f"Token management failed: {str(e)}")
 
     def force_token_expiration(self):
         """

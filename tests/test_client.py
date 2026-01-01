@@ -711,3 +711,452 @@ class TestClientErrorHandling:
                 Exception
             ):  # Should raise some form of JSON decode error
                 self.client.get_organizations()
+
+
+class TestAssetTagsAPI:
+    """Test cases for Asset Tags API endpoints."""
+
+    def setup_method(self):
+        """Set up test fixtures."""
+        with patch("ninjapy.client.TokenManager") as mock_token_manager:
+            mock_token_manager.return_value.get_valid_token.return_value = "test_token"
+
+            self.client = NinjaRMMClient(
+                token_url="https://test.com/token",
+                client_id="test",
+                client_secret="test",
+                scope="test",
+                base_url="https://test.com",
+            )
+
+    @responses.activate
+    def test_get_tags_success(self):
+        """Test successful retrieval of all asset tags."""
+        mock_response = {
+            "tags": [
+                {
+                    "id": 1,
+                    "name": "Production",
+                    "description": "Production servers",
+                    "createTime": 1704067200.0,
+                    "updateTime": 1704153600.0,
+                    "createdByUserId": 10,
+                    "updatedByUserId": 10,
+                    "targetsCount": 5,
+                    "createdBy": {"id": 10, "name": "Admin", "email": "admin@test.com"},
+                    "updatedBy": {"id": 10, "name": "Admin", "email": "admin@test.com"},
+                },
+                {
+                    "id": 2,
+                    "name": "Development",
+                    "description": "Dev machines",
+                    "createTime": 1704067200.0,
+                    "updateTime": 1704153600.0,
+                    "createdByUserId": 10,
+                    "updatedByUserId": 10,
+                    "targetsCount": 3,
+                },
+            ]
+        }
+
+        responses.add(
+            responses.GET,
+            "https://test.com/v2/tag",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.get_tags()
+
+        assert "tags" in result
+        assert len(result["tags"]) == 2
+        assert result["tags"][0]["name"] == "Production"
+        assert result["tags"][1]["name"] == "Development"
+
+    @responses.activate
+    def test_create_tag_success(self):
+        """Test successful creation of an asset tag."""
+        mock_response = {
+            "id": 3,
+            "name": "Test Tag",
+            "description": "A test tag",
+            "createTime": 1704067200.0,
+            "updateTime": 1704067200.0,
+            "createdByUserId": 10,
+            "updatedByUserId": 10,
+        }
+
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.create_tag(name="Test Tag", description="A test tag")
+
+        assert result["id"] == 3
+        assert result["name"] == "Test Tag"
+        assert result["description"] == "A test tag"
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["name"] == "Test Tag"
+        assert request_body["description"] == "A test tag"
+
+    @responses.activate
+    def test_create_tag_without_description(self):
+        """Test creating a tag without a description."""
+        mock_response = {
+            "id": 4,
+            "name": "Simple Tag",
+            "createTime": 1704067200.0,
+            "updateTime": 1704067200.0,
+            "createdByUserId": 10,
+            "updatedByUserId": 10,
+        }
+
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.create_tag(name="Simple Tag")
+
+        assert result["id"] == 4
+        assert result["name"] == "Simple Tag"
+
+    @responses.activate
+    def test_update_tag_success(self):
+        """Test successful update of an asset tag."""
+        mock_response = {
+            "id": 1,
+            "name": "Updated Tag",
+            "description": "Updated description",
+            "createTime": 1704067200.0,
+            "updateTime": 1704240000.0,
+            "createdByUserId": 10,
+            "updatedByUserId": 11,
+        }
+
+        responses.add(
+            responses.PUT,
+            "https://test.com/v2/tag/1",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.update_tag(
+                tag_id=1, name="Updated Tag", description="Updated description"
+            )
+
+        assert result["id"] == 1
+        assert result["name"] == "Updated Tag"
+        assert result["description"] == "Updated description"
+
+    @responses.activate
+    def test_update_tag_partial(self):
+        """Test partial update of an asset tag (name only)."""
+        mock_response = {
+            "id": 1,
+            "name": "New Name Only",
+            "description": "Original description",
+            "createTime": 1704067200.0,
+            "updateTime": 1704240000.0,
+            "createdByUserId": 10,
+            "updatedByUserId": 11,
+        }
+
+        responses.add(
+            responses.PUT,
+            "https://test.com/v2/tag/1",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.update_tag(tag_id=1, name="New Name Only")
+
+        assert result["name"] == "New Name Only"
+
+        # Verify request body only contains name
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert "name" in request_body
+        assert "description" not in request_body
+
+    @responses.activate
+    def test_delete_tag_success(self):
+        """Test successful deletion of a single asset tag."""
+        responses.add(
+            responses.DELETE,
+            "https://test.com/v2/tag/1",
+            status=204,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            # Should not raise an exception
+            self.client.delete_tag(tag_id=1)
+
+        assert len(responses.calls) == 1
+
+    @responses.activate
+    def test_delete_tags_batch_success(self):
+        """Test successful batch deletion of multiple asset tags."""
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag/delete",
+            status=204,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            self.client.delete_tags(tag_ids=[1, 2, 3])
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body == [1, 2, 3]
+
+    @responses.activate
+    def test_merge_tags_into_existing(self):
+        """Test merging tags into an existing tag."""
+        mock_response = {
+            "id": 1,
+            "name": "Target Tag",
+            "description": "Merged tag",
+            "createTime": 1704067200.0,
+            "updateTime": 1704240000.0,
+            "createdByUserId": 10,
+            "updatedByUserId": 11,
+        }
+
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag/merge",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.merge_tags(
+                tag_ids=[2, 3, 4],
+                merge_method="MERGE_INTO_EXISTING_TAG",
+                merge_into_tag_id=1,
+            )
+
+        assert result["id"] == 1
+        assert result["name"] == "Target Tag"
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["tagIds"] == [2, 3, 4]
+        assert request_body["mergeMethod"] == "MERGE_INTO_EXISTING_TAG"
+        assert request_body["mergeIntoTagId"] == 1
+
+    @responses.activate
+    def test_merge_tags_into_new(self):
+        """Test merging tags into a new tag."""
+        mock_response = {
+            "id": 10,
+            "name": "Merged New Tag",
+            "description": "All merged together",
+            "createTime": 1704240000.0,
+            "updateTime": 1704240000.0,
+            "createdByUserId": 11,
+            "updatedByUserId": 11,
+        }
+
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag/merge",
+            json=mock_response,
+            status=200,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            result = self.client.merge_tags(
+                tag_ids=[1, 2, 3],
+                merge_method="MERGE_INTO_NEW_TAG",
+                name="Merged New Tag",
+                description="All merged together",
+            )
+
+        assert result["id"] == 10
+        assert result["name"] == "Merged New Tag"
+        assert result["description"] == "All merged together"
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["tagIds"] == [1, 2, 3]
+        assert request_body["mergeMethod"] == "MERGE_INTO_NEW_TAG"
+        assert request_body["name"] == "Merged New Tag"
+        assert request_body["description"] == "All merged together"
+
+    @responses.activate
+    def test_batch_tag_assets_add_and_remove(self):
+        """Test batch adding and removing tags from assets."""
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag/device",
+            status=200,
+            json={},
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            self.client.batch_tag_assets(
+                asset_type="device",
+                asset_ids=[100, 101, 102],
+                tag_ids_to_add=[1, 2],
+                tag_ids_to_remove=[3],
+            )
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["assetIds"] == [100, 101, 102]
+        assert request_body["tagIdsToAdd"] == [1, 2]
+        assert request_body["tagIdsToRemove"] == [3]
+
+    @responses.activate
+    def test_batch_tag_assets_add_only(self):
+        """Test batch adding tags to assets without removing."""
+        responses.add(
+            responses.POST,
+            "https://test.com/v2/tag/device",
+            status=200,
+            json={},
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            self.client.batch_tag_assets(
+                asset_type="device",
+                asset_ids=[100],
+                tag_ids_to_add=[1, 2, 3],
+            )
+
+        # Verify request body doesn't include tagIdsToRemove
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["assetIds"] == [100]
+        assert request_body["tagIdsToAdd"] == [1, 2, 3]
+        assert "tagIdsToRemove" not in request_body
+
+    @responses.activate
+    def test_set_asset_tags_success(self):
+        """Test setting exact tags for an asset."""
+        responses.add(
+            responses.PUT,
+            "https://test.com/v2/tag/device/100",
+            status=200,
+            json={},
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            self.client.set_asset_tags(
+                asset_type="device",
+                asset_id=100,
+                tag_ids=[1, 2, 3],
+            )
+
+        # Verify request body
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["tagIds"] == [1, 2, 3]
+
+    @responses.activate
+    def test_set_asset_tags_empty(self):
+        """Test clearing all tags from an asset."""
+        responses.add(
+            responses.PUT,
+            "https://test.com/v2/tag/device/100",
+            status=200,
+            json={},
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            self.client.set_asset_tags(
+                asset_type="device",
+                asset_id=100,
+                tag_ids=[],
+            )
+
+        # Verify request body has empty array
+        import json
+
+        request_body = json.loads(responses.calls[0].request.body)
+        assert request_body["tagIds"] == []
+
+    @responses.activate
+    def test_get_tags_error_handling(self):
+        """Test error handling for get_tags."""
+        responses.add(
+            responses.GET,
+            "https://test.com/v2/tag",
+            json={"message": "Unauthorized"},
+            status=401,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            with pytest.raises(NinjaRMMAuthError):
+                self.client.get_tags()
+
+    @responses.activate
+    def test_delete_tag_not_found(self):
+        """Test deleting a tag that doesn't exist."""
+        responses.add(
+            responses.DELETE,
+            "https://test.com/v2/tag/999",
+            json={"message": "Tag not found"},
+            status=404,
+        )
+
+        with patch.object(
+            self.client.token_manager, "get_valid_token", return_value="test_token"
+        ):
+            with pytest.raises(NinjaRMMError):
+                self.client.delete_tag(tag_id=999)

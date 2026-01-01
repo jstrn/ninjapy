@@ -63,3 +63,26 @@ class NotificationChannel(TypedDict):
     description: Optional[str]
     enabled: bool
     type: str
+
+
+class TagUser(TypedDict, total=False):
+    """User information associated with a tag."""
+
+    id: int
+    name: str
+    email: str
+
+
+class AssetTag(TypedDict, total=False):
+    """Asset tag information."""
+
+    id: int
+    name: str
+    description: str
+    createTime: float
+    updateTime: float
+    createdByUserId: int
+    updatedByUserId: int
+    targetsCount: int
+    createdBy: TagUser
+    updatedBy: TagUser

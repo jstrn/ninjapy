@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-01-01
+
+### Added
+- **Asset Tags API**: Complete implementation of tag management endpoints
+  - `get_tags()` - List all asset tags
+  - `create_tag()` - Create a new tag
+  - `update_tag()` - Update an existing tag
+  - `delete_tag()` - Delete a single tag
+  - `delete_tags()` - Batch delete multiple tags
+  - `merge_tags()` - Merge tags into existing or new tag
+  - `batch_tag_assets()` - Bulk add/remove tags on assets
+  - `set_asset_tags()` - Set exact tags for an asset
+- New TypedDict types: `TagUser`, `AssetTag`
+- New enum: `TagMergeMethod`
+- Comprehensive test coverage for all tag endpoints
+
+### Changed
+- Version is now dynamically read from package metadata (single source of truth)
+- Security checks now use SafeDep `vet` instead of `safety` for dependency scanning
+- Makefile `security` target auto-installs `vet` if not present
+
+### Fixed
+- Version sync issue between `pyproject.toml` and `__init__.py`
+
+## [0.1.2] - 2025-06-22
+
+### Changed
+- Minor updates and fixes
+
 ## [0.1.1] - 2025-06-21
 
 ### Added
@@ -61,9 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ticketing system partially implemented
 - Knowledge base management not yet implemented
 - Checklist management not yet implemented
-- Tag management not yet implemented (Ninja's API tags endpoint is broken)
 - Related items management not yet implemented
 - Vulnerability scanning not yet implemented
 
-[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/jstrn/ninjapy/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/jstrn/ninjapy/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/jstrn/ninjapy/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jstrn/ninjapy/releases/tag/v0.1.0 

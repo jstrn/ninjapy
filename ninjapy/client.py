@@ -3800,3 +3800,237 @@ class NinjaRMMClient:
         return list(
             self._paginate_with_cursor(method_func, page_size=page_size, **kwargs)
         )
+
+    # =========================================================================
+    # Asset Tags API
+    # =========================================================================
+
+    def get_tags(self) -> Dict:
+        """
+        Get a list of all asset tags.
+
+        Returns:
+            Dict: Response containing a 'tags' key with list of tag objects.
+                Each tag object contains:
+                - id (int): Tag ID
+                - name (str): Tag name
+                - description (str): Description of the tag
+                - createTime (float): Creation time in seconds since unix epoch
+                - updateTime (float): Last update time in seconds since unix epoch
+                - createdByUserId (int): ID of the user that created the tag
+                - updatedByUserId (int): ID of the user that last updated the tag
+                - targetsCount (int): Number of assets with this tag
+                - createdBy (dict): User info (id, name, email) who created the tag
+                - updatedBy (dict): User info (id, name, email) who last updated the tag
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMAPIError: If the API request fails
+        """
+        return self._request("GET", "/v2/tag")
+
+    def create_tag(
+        self,
+        name: str,
+        description: Optional[str] = None,
+    ) -> Dict:
+        """
+        Create a new asset tag.
+
+        Args:
+            name: Tag name (1-40 characters)
+            description: Tag description (0-250 characters, optional)
+
+        Returns:
+            Dict: Created tag object containing:
+                - id (int): Tag ID
+                - name (str): Tag name
+                - description (str): Description of the tag
+                - createTime (float): Creation time in seconds since unix epoch
+                - updateTime (float): Last update time in seconds since unix epoch
+                - createdByUserId (int): ID of the user that created the tag
+                - updatedByUserId (int): ID of the user that last updated the tag
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If name is invalid (empty or > 40 chars)
+            NinjaRMMAPIError: If the API request fails
+        """
+        data: Dict[str, Any] = {"name": name}
+        if description is not None:
+            data["description"] = description
+
+        return self._request("POST", "/v2/tag", json=data)
+
+    def update_tag(
+        self,
+        tag_id: int,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict:
+        """
+        Update an existing asset tag.
+
+        Args:
+            tag_id: ID of the tag to update
+            name: New tag name (0-40 characters, optional)
+            description: New tag description (0-250 characters, optional)
+
+        Returns:
+            Dict: Updated tag object containing:
+                - id (int): Tag ID
+                - name (str): Tag name
+                - description (str): Description of the tag
+                - createTime (float): Creation time in seconds since unix epoch
+                - updateTime (float): Last update time in seconds since unix epoch
+                - createdByUserId (int): ID of the user that created the tag
+                - updatedByUserId (int): ID of the user that last updated the tag
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If parameters are invalid
+            NinjaRMMAPIError: If the API request fails
+                - 404: Tag not found
+        """
+        data: Dict[str, Any] = {}
+        if name is not None:
+            data["name"] = name
+        if description is not None:
+            data["description"] = description
+
+        return self._request("PUT", f"/v2/tag/{tag_id}", json=data)
+
+    def delete_tag(self, tag_id: int) -> None:
+        """
+        Delete a single asset tag.
+
+        Args:
+            tag_id: ID of the tag to delete
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMAPIError: If the API request fails
+                - 404: Tag not found
+        """
+        self._request("DELETE", f"/v2/tag/{tag_id}")
+
+    def delete_tags(self, tag_ids: List[int]) -> None:
+        """
+        Delete multiple asset tags at once.
+
+        Args:
+            tag_ids: List of tag IDs to delete
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If tag_ids is empty or invalid
+            NinjaRMMAPIError: If the API request fails
+        """
+        self._request("POST", "/v2/tag/delete", json=tag_ids)
+
+    def merge_tags(
+        self,
+        tag_ids: List[int],
+        merge_method: Literal["MERGE_INTO_EXISTING_TAG", "MERGE_INTO_NEW_TAG"],
+        merge_into_tag_id: Optional[int] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> Dict:
+        """
+        Merge multiple tags into one existing or new tag.
+
+        When merging into an existing tag, provide merge_into_tag_id.
+        When creating a new tag, provide name (and optionally description).
+
+        Args:
+            tag_ids: List of tag IDs to merge
+            merge_method: Either "MERGE_INTO_EXISTING_TAG" or "MERGE_INTO_NEW_TAG"
+            merge_into_tag_id: Target tag ID (required when merge_method is
+                "MERGE_INTO_EXISTING_TAG")
+            name: New tag name (required when merge_method is "MERGE_INTO_NEW_TAG",
+                0-40 characters)
+            description: New tag description (optional, 0-250 characters)
+
+        Returns:
+            Dict: Resulting tag object containing:
+                - id (int): Tag ID
+                - name (str): Tag name
+                - description (str): Description of the tag
+                - createTime (float): Creation time in seconds since unix epoch
+                - updateTime (float): Last update time in seconds since unix epoch
+                - createdByUserId (int): ID of the user that created the tag
+                - updatedByUserId (int): ID of the user that last updated the tag
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If required parameters are missing
+            NinjaRMMAPIError: If the API request fails
+                - 404: Tag not found
+        """
+        data: Dict[str, Any] = {
+            "tagIds": tag_ids,
+            "mergeMethod": merge_method,
+        }
+        if merge_into_tag_id is not None:
+            data["mergeIntoTagId"] = merge_into_tag_id
+        if name is not None:
+            data["name"] = name
+        if description is not None:
+            data["description"] = description
+
+        return self._request("POST", "/v2/tag/merge", json=data)
+
+    def batch_tag_assets(
+        self,
+        asset_type: Literal["device"],
+        asset_ids: List[int],
+        tag_ids_to_add: Optional[List[int]] = None,
+        tag_ids_to_remove: Optional[List[int]] = None,
+    ) -> None:
+        """
+        Batch add and/or remove tags from multiple assets.
+
+        Args:
+            asset_type: Type of asset (currently only "device" is supported)
+            asset_ids: List of asset IDs to modify
+            tag_ids_to_add: List of tag IDs to add to the assets (optional)
+            tag_ids_to_remove: List of tag IDs to remove from the assets (optional)
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If parameters are invalid
+            NinjaRMMAPIError: If the API request fails
+        """
+        data: Dict[str, Any] = {"assetIds": asset_ids}
+        if tag_ids_to_add is not None:
+            data["tagIdsToAdd"] = tag_ids_to_add
+        if tag_ids_to_remove is not None:
+            data["tagIdsToRemove"] = tag_ids_to_remove
+
+        self._request("POST", f"/v2/tag/{asset_type}", json=data)
+
+    def set_asset_tags(
+        self,
+        asset_type: Literal["device"],
+        asset_id: int,
+        tag_ids: List[int],
+    ) -> None:
+        """
+        Set the exact tags for a specific asset.
+
+        This replaces all existing tags on the asset with the provided tag IDs.
+
+        Args:
+            asset_type: Type of asset (currently only "device" is supported)
+            asset_id: ID of the asset to update
+            tag_ids: List of tag IDs to assign to the asset. Existing tags
+                on the asset will be removed.
+
+        Raises:
+            NinjaRMMAuthError: If authentication fails
+            NinjaRMMValidationError: If parameters are invalid
+            NinjaRMMAPIError: If the API request fails
+                - 404: Asset not found
+        """
+        data: Dict[str, Any] = {"tagIds": tag_ids}
+        self._request("PUT", f"/v2/tag/{asset_type}/{asset_id}", json=data)
