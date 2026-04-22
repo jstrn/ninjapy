@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Raised dependency floors to clear current GitHub security alerts in `uv.lock`, including `requests>=2.33.0`, `pytest>=9.0.3`, `cryptography>=46.0.7`, and `Pygments>=2.20.0` for the relevant runtime, test, and tooling surfaces
+
 ## [0.1.4] - 2026-04-22
 
 ### Changed
