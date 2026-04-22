@@ -2,13 +2,17 @@
 Tests for NinjaRMM client functionality.
 """
 
+import time
 from unittest.mock import patch
 
 import pytest
 import responses
+from requests import Request, Response
+from requests.adapters import HTTPAdapter
 
 from ninjapy.client import NinjaRMMClient
 from ninjapy.exceptions import NinjaRMMAuthError, NinjaRMMError
+from ninjapy._session import ExpiringHTTPAdapter
 
 
 class TestNinjaRMMClient:
@@ -39,6 +43,8 @@ class TestNinjaRMMClient:
         assert self.client.base_url == self.base_url
         assert hasattr(self.client, "token_manager")
         assert hasattr(self.client, "session")
+        assert isinstance(self.client.session.adapters["https://"], ExpiringHTTPAdapter)
+        assert isinstance(self.client.session.adapters["http://"], ExpiringHTTPAdapter)
 
     @responses.activate
     def test_get_organizations_success(self):
@@ -211,8 +217,6 @@ class TestNinjaRMMClient:
         )
 
         # Temporarily remove retry adapters so our rate limit logic is tested
-        from requests.adapters import HTTPAdapter
-
         with patch.object(
             self.client.token_manager, "get_valid_token", return_value="test_token"
         ):
@@ -234,6 +238,76 @@ class TestNinjaRMMClient:
                 # Restore original adapters
                 for prefix, adapter in original_adapters.items():
                     self.client.session.mount(prefix, adapter)
+
+    def test_request_timeout_tuple_is_preserved(self):
+        """Test tuple timeouts are passed through to requests."""
+        timeout = (2, 15)
+
+        with patch("ninjapy.client.TokenManager") as mock_token_manager:
+            mock_token_manager.return_value.get_valid_token.return_value = "test_token"
+            client = NinjaRMMClient(
+                token_url=self.token_url,
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                scope=self.scope,
+                base_url=self.base_url,
+                request_timeout=timeout,
+            )
+
+        response = Response()
+        response.status_code = 200
+        response._content = b"[]"
+        response.headers["Content-Type"] = "application/json"
+
+        with patch.object(client.session, "request", return_value=response) as mock_request:
+            client.get_organizations()
+
+        assert mock_request.call_args.kwargs["timeout"] == timeout
+
+    def test_expiring_http_adapter_refreshes_stale_pools(self):
+        """Test stale pools are cleared before the next send."""
+        adapter = ExpiringHTTPAdapter(pool_max_age=1)
+        adapter._last_pool_refresh = time.monotonic() - 5
+        request = Request("GET", "https://example.com").prepare()
+        response = Response()
+        response.status_code = 200
+        response._content = b"{}"
+
+        with patch.object(adapter, "close") as mock_close:
+            with patch.object(HTTPAdapter, "send", return_value=response) as mock_send:
+                adapter.send(
+                    request,
+                    stream=False,
+                    timeout=5,
+                    verify=True,
+                    cert=None,
+                    proxies=None,
+                )
+
+        mock_close.assert_called_once()
+        mock_send.assert_called_once()
+        assert adapter._last_pool_refresh > time.monotonic() - 2
+
+    def test_expiring_http_adapter_forces_recycle_when_disabled(self):
+        """Test non-positive pool max age disables connection reuse entirely."""
+        adapter = ExpiringHTTPAdapter(pool_max_age=0)
+        request = Request("GET", "https://example.com").prepare()
+        response = Response()
+        response.status_code = 200
+        response._content = b"{}"
+
+        with patch.object(adapter, "close") as mock_close:
+            with patch.object(HTTPAdapter, "send", return_value=response):
+                adapter.send(
+                    request,
+                    stream=False,
+                    timeout=5,
+                    verify=True,
+                    cert=None,
+                    proxies=None,
+                )
+
+        mock_close.assert_called_once()
 
     @responses.activate
     def test_no_content_response(self):

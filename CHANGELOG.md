@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-04-22
+
+### Changed
+- HTTP sessions now recycle pooled connections after a configurable max age to avoid reusing stale idle sockets behind load balancers and NATs
+- HTTP sessions now enable TCP keepalive on pooled sockets where the platform supports it
+- `request_timeout` now accepts either a single timeout value or a `(connect_timeout, read_timeout)` tuple
+- Runtime dependency resolution now requires `urllib3>=2.6.3` via a newer `requests` floor to avoid known high-severity urllib3 issues in older installs
+- Removed the unused `safety` UV dev-group dependency so critical `authlib` and `nltk` findings are no longer pulled into the lockfile by an unused scanner
+
 ## [0.1.3] - 2026-01-01
 
 ### Added
@@ -93,7 +102,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Related items management not yet implemented
 - Vulnerability scanning not yet implemented
 
-[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/jstrn/ninjapy/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jstrn/ninjapy/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jstrn/ninjapy/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/jstrn/ninjapy/compare/v0.1.0...v0.1.1

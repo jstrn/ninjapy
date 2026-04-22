@@ -9,10 +9,10 @@ from typing import (
     List,
     Literal,
     Optional,
+    Union,
 )
 
 import requests
-from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .auth import TokenManager
@@ -22,6 +22,7 @@ from .exceptions import (
     NinjaRMMError,
     NinjaRMMValidationError,
 )
+from ._session import ExpiringHTTPAdapter
 from .utils import process_api_response
 
 # Configure logging
@@ -29,6 +30,8 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("ninjapy.client")
+
+RequestTimeout = Union[int, float, tuple[Union[int, float], Union[int, float]]]
 
 
 class NinjaRMMClient:
@@ -95,11 +98,12 @@ class NinjaRMMClient:
         scope: str,
         base_url: str = "https://app.ninjarmm.com",
         convert_timestamps: bool = True,
-        request_timeout: int = 10,
+        request_timeout: RequestTimeout = 10,
         retry_total: int = 3,
         retry_backoff_factor: float = 1.0,
         retry_status_forcelist: Optional[List[int]] = None,
         rate_limit_default_retry_after: int = 10,
+        pool_max_age: Optional[float] = 60.0,
     ) -> None:
         """
         Initialize the NinjaRMM API client.
@@ -112,13 +116,16 @@ class NinjaRMMClient:
             base_url: Base URL for the API. Defaults to https://api.ninjarmm.com
             convert_timestamps: Whether to automatically convert epoch timestamps
                 to ISO format. Defaults to True.
-            request_timeout: Timeout for HTTP requests in seconds. Defaults to 10.
+            request_timeout: Timeout for HTTP requests in seconds, or a
+                ``(connect_timeout, read_timeout)`` tuple. Defaults to 10.
             retry_total: Total number of retries for failed requests. Defaults to 3.
             retry_backoff_factor: Factor for exponential backoff between retries. Defaults to 1.0.
             retry_status_forcelist: List of HTTP status codes to retry on.
                 Defaults to [429, 500, 502, 503, 504].
             rate_limit_default_retry_after: Default retry-after time when rate limited
                 and no Retry-After header is provided. Defaults to 10 seconds.
+            pool_max_age: Maximum age for pooled HTTP connections in seconds.
+                Older pooled connections are recycled before the next request.
         """
         self.base_url = base_url.rstrip("/")
         self.convert_timestamps = convert_timestamps
@@ -154,7 +161,10 @@ class NinjaRMMClient:
                 "DELETE",
             ],
         )
-        adapter = HTTPAdapter(max_retries=retries)
+        adapter = ExpiringHTTPAdapter(
+            max_retries=retries,
+            pool_max_age=pool_max_age,
+        )
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
 
