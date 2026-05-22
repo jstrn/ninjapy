@@ -1,7 +1,7 @@
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any, Dict, List, Literal, Optional, Union
 
 import aiohttp
@@ -644,7 +644,7 @@ class AsyncNinjaRMMClient:
         if after:
             params["after"] = after
         if org_filter:
-            params["of"] = org_filter
+            params["df"] = org_filter
         if expand:
             params["expand"] = expand
         if include_backup_usage:
@@ -679,7 +679,7 @@ class AsyncNinjaRMMClient:
         if after:
             params["after"] = after
         if org_filter:
-            params["of"] = org_filter
+            params["df"] = org_filter
         if expand:
             params["expand"] = expand
         if include_backup_usage:
@@ -1853,6 +1853,289 @@ class AsyncNinjaRMMClient:
             org_filter=org_filter,
             expand=expand,
             include_backup_usage=include_backup_usage,
+        )
+
+    async def _resolve_org_ids(
+        self,
+        org_ids: Optional[List[int]] = None,
+        *,
+        page_size: int = 100,
+    ) -> List[int]:
+        if org_ids is not None:
+            return org_ids
+        orgs = await self.get_all_organizations(page_size=page_size)
+        return [org["id"] for org in orgs if org.get("id") is not None]
+
+    async def _fetch_flat_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        resource_name: str,
+        fetch_for_org: Callable[[int], Awaitable[List[Dict]]],
+    ) -> List[Dict]:
+        resolved_org_ids = await self._resolve_org_ids(org_ids, page_size=page_size)
+        if not resolved_org_ids:
+            return []
+
+        async def fetch(org_id: int) -> List[Dict]:
+            items = await fetch_for_org(org_id)
+            logger.info(
+                "Fetched %s %s for org_id=%s", len(items), resource_name, org_id
+            )
+            return items
+
+        results = await map_concurrent(
+            resolved_org_ids,
+            fetch,
+            max_concurrency=max_concurrency,
+        )
+        return [item for org_items in results for item in org_items]
+
+    async def get_devices_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        detailed: bool = True,
+        max_concurrency: int = 10,
+        expand: Optional[str] = "organization,location",
+        include_backup_usage: bool = False,
+    ) -> List[Dict]:
+        """
+        Get devices for one or more organizations with concurrent fetching.
+
+        When ``org_ids`` is omitted, all organizations are fetched first and
+        devices are retrieved for each organization in parallel. Returns a flat
+        list of device dicts (same shape as ``ninja.devices`` Mongo documents).
+
+        Args:
+            org_ids: Organization IDs to fetch. ``None`` fetches all organizations.
+            page_size: Number of devices per pagination page.
+            detailed: Use the detailed devices endpoint when ``True``.
+            max_concurrency: Maximum number of concurrent organization fetches.
+            expand: Expand fields passed to the device endpoints.
+            include_backup_usage: Whether to include backup usage data.
+
+        Returns:
+            List[Dict]: Device records from all requested organizations.
+        """
+        fetch_devices = (
+            self.get_all_devices_detailed if detailed else self.get_all_devices
+        )
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await fetch_devices(
+                page_size=page_size,
+                org_filter=f"org={org_id}",
+                expand=expand,
+                include_backup_usage=include_backup_usage,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="devices",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def get_organizations_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+    ) -> List[Dict]:
+        """
+        Get full organization details concurrently.
+
+        Returns a flat list of organization dicts with embedded locations and
+        policies (same shape as ``ninja.organizations`` Mongo documents).
+
+        Args:
+            org_ids: Organization IDs to fetch. ``None`` fetches all organizations.
+            page_size: Page size used when resolving all organization IDs.
+            max_concurrency: Maximum number of concurrent organization fetches.
+
+        Returns:
+            List[Dict]: Organization records from all requested organizations.
+        """
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return [await self.get_organization(org_id)]
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="organizations",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_windows_services_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        name: Optional[str] = None,
+        state: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query Windows services for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_windows_services(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                name=name,
+                state=state,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="windows services",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_operating_systems_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        timestamp_filter: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query operating systems for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_operating_systems(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                timestamp_filter=timestamp_filter,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="operating systems",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_os_patches_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        timestamp_filter: Optional[str] = None,
+        status: Optional[str] = None,
+        patch_type: Optional[str] = None,
+        severity: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query OS patches for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_os_patches(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                timestamp_filter=timestamp_filter,
+                status=status,
+                patch_type=patch_type,
+                severity=severity,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="OS patches",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_custom_fields_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        updated_after: Optional[str] = None,
+        fields: Optional[str] = None,
+        show_secure_values: Optional[bool] = None,
+    ) -> List[Dict]:
+        """
+        Query custom fields for one or more organizations concurrently.
+
+        Returns a flat list of custom field records (same shape as
+        ``ninja.custom_fields_updated`` Mongo documents).
+        """
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_custom_fields(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                updated_after=updated_after,
+                fields=fields,
+                show_secure_values=show_secure_values,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="custom fields",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_software_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        installed_before: Optional[str] = None,
+        installed_after: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query installed software for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_software(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                installed_before=installed_before,
+                installed_after=installed_after,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="software records",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def get_organization_documents_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+    ) -> List[Dict]:
+        """Get organization documents for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.get_organization_documents(org_id)
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="organization documents",
+            fetch_for_org=fetch_for_org,
         )
 
     async def search_all_devices(

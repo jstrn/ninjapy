@@ -500,7 +500,8 @@ class TestNinjaRMMClient:
 
             # Check all parameters were passed
             assert "pageSize=50" in get_request_url(rsps)
-            assert "of=test_org" in get_request_url(rsps)
+            assert "of=test_org" not in get_request_url(rsps)
+            assert "df=test_org" in get_request_url(rsps)
             assert "expand=volumes" in get_request_url(rsps)
             assert "includeBackupUsage=true" in get_request_url(rsps)
 
