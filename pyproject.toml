@@ -41,8 +41,7 @@ keywords = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "requests>=2.33.0",
-    "urllib3>=2.6.3",
+    "aiohttp>=3.12.14",
 ]
 
 [project.urls]
@@ -71,7 +70,7 @@ test = [
     "pytest>=9.0.3",
     "pytest-cov>=4.0.0",
     "pytest-asyncio>=0.21.0",
-    "responses>=0.23.0"
+    "aioresponses>=0.7.8"
 ]
 docs = [
     "Pygments>=2.20.0",
@@ -131,6 +130,7 @@ python_functions = ["test_*"]
 markers = [
     "integration: marks tests as integration tests"
 ]
+asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["ninjapy"]

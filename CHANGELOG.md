@@ -7,8 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Native async client (`AsyncNinjaRMMClient`) backed by `aiohttp`
+- Async pagination helpers: `paginate_after`, `paginate_cursor`, `collect_all`, `map_concurrent`
+- Sync `NinjaRMMClient` wrapper for backward-compatible synchronous usage
+
 ### Changed
-- Raised dependency floors to clear current GitHub security alerts in `uv.lock`, including `requests>=2.33.0`, `pytest>=9.0.3`, `cryptography>=46.0.7`, and `Pygments>=2.20.0` for the relevant runtime, test, and tooling surfaces
+- Replaced `requests`/`urllib3` runtime dependencies with `aiohttp>=3.12.14`
+- HTTP transport now uses aiohttp session pooling with configurable pool refresh
+- OAuth token management now uses async locking via `AsyncTokenManager`
+- Tests migrated from `responses` to `aioresponses`
+
+### Removed
+- Direct dependency on `requests` and `urllib3`
+- `ExpiringHTTPAdapter` requests/urllib3 session adapter
 
 ## [0.1.4] - 2026-04-22
 

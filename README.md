@@ -14,7 +14,7 @@ A comprehensive Python API client for NinjaRMM (NinjaOne) with support for all m
 - **Error Handling**: Comprehensive exception handling with detailed error messages
 - **Rate Limiting**: Built-in retry logic and rate limit handling
 - **Timestamp Conversion**: Automatic conversion of epoch timestamps to ISO datetime format
-- **Async Ready**: Designed with future async support in mind
+- **Async Support**: Native `AsyncNinjaRMMClient` with aiohttp, plus sync wrappers for backward compatibility
 
 ## Installation
 
@@ -92,6 +92,32 @@ with NinjaRMMClient(
     
     # Client will automatically close when exiting the context
 ```
+
+### Async Usage
+
+For async applications, use `AsyncNinjaRMMClient` directly:
+
+```python
+import asyncio
+from ninjapy import AsyncNinjaRMMClient
+
+async def main():
+    async with AsyncNinjaRMMClient(
+        token_url="https://app.ninjarmm.com/oauth/token",
+        client_id="your_client_id",
+        client_secret="your_client_secret",
+        scope="monitoring management control",
+    ) as client:
+        organizations = await client.get_organizations()
+        print(f"Found {len(organizations)} organizations")
+
+        async for device in client.iter_all_devices(page_size=100):
+            print(device["displayName"])
+
+asyncio.run(main())
+```
+
+Existing synchronous code can continue using `NinjaRMMClient`; it wraps the async implementation internally.
 
 ### Device Management
 
