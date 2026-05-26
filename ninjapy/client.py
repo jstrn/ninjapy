@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from typing import Any, Dict, List, Literal, Optional, Union
 
@@ -477,6 +478,12 @@ class AsyncNinjaRMMClient:
         Args:
             org_id: Organization identifier
 
+        Note:
+            The current public NinjaRMM API spec does not document a DELETE on
+            ``/v2/organization/{id}``. This method targets the canonical
+            singular path but may return an HTTP error depending on tenant
+            entitlements.
+
         Raises:
             NinjaRMMAuthError: If authentication fails
             NinjaRMMAPIError: If deletion fails
@@ -484,11 +491,16 @@ class AsyncNinjaRMMClient:
                 - 404: Organization not found
                 - 409: Organization has active devices
         """
-        await self._request("DELETE", f"/v2/organizations/{org_id}")
+        await self._request("DELETE", f"/v2/organization/{org_id}")
 
     async def get_organization_settings(self, org_id: int) -> Dict:
         """
         Get organization settings.
+
+        Note:
+            ``/v2/organization/{id}/settings`` is not part of the current
+            public NinjaRMM API spec; this method targets the canonical
+            singular path but the endpoint may not be available.
 
         Args:
             org_id (int): Organization identifier
@@ -496,11 +508,16 @@ class AsyncNinjaRMMClient:
         Returns:
             Organization settings object
         """
-        return await self._request("GET", f"/v2/organizations/{org_id}/settings")
+        return await self._request("GET", f"/v2/organization/{org_id}/settings")
 
     async def update_organization_settings(self, org_id: int, settings: Dict) -> Dict:
         """
         Update organization settings.
+
+        Note:
+            ``/v2/organization/{id}/settings`` is not part of the current
+            public NinjaRMM API spec; this method targets the canonical
+            singular path but the endpoint may not be available.
 
         Args:
             org_id (int): Organization identifier
@@ -511,7 +528,7 @@ class AsyncNinjaRMMClient:
             Updated organization settings
         """
         return await self._request(
-            "PUT", f"/v2/organizations/{org_id}/settings", json=settings
+            "PUT", f"/v2/organization/{org_id}/settings", json=settings
         )
 
     async def get_organization_locations(self, org_id: int) -> List[Dict]:
@@ -524,7 +541,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List of location objects
         """
-        return await self._request("GET", f"/v2/organizations/{org_id}/locations")
+        return await self._request("GET", f"/v2/organization/{org_id}/locations")
 
     async def create_organization_location(
         self,
@@ -554,7 +571,7 @@ class AsyncNinjaRMMClient:
             data["description"] = description
 
         return await self._request(
-            "POST", f"/v2/organizations/{org_id}/locations", json=data
+            "POST", f"/v2/organization/{org_id}/locations", json=data
         )
 
     async def update_organization_location(
@@ -587,24 +604,36 @@ class AsyncNinjaRMMClient:
             data["description"] = description
 
         return await self._request(
-            "PATCH", f"/v2/organizations/{org_id}/locations/{location_id}", json=data
+            "PATCH", f"/v2/organization/{org_id}/locations/{location_id}", json=data
         )
 
     async def delete_organization_location(self, org_id: int, location_id: int) -> None:
         """
         Delete an organization location.
 
+        Note:
+            The current public NinjaRMM API spec does not document a DELETE on
+            ``/v2/organization/{id}/locations/{locationId}``. This method
+            targets the canonical singular path but may return an HTTP error
+            depending on tenant entitlements.
+
         Args:
             org_id (int): Organization identifier
             location_id (int): Location identifier
         """
         await self._request(
-            "DELETE", f"/v2/organizations/{org_id}/locations/{location_id}"
+            "DELETE", f"/v2/organization/{org_id}/locations/{location_id}"
         )
 
     async def get_organization_policies(self, org_id: int) -> List[Dict]:
         """
         Get organization policy mappings.
+
+        Note:
+            The current public NinjaRMM API spec only documents PUT on
+            ``/v2/organization/{id}/policies`` (no GET). This method targets
+            the canonical singular path but the endpoint may not be
+            available.
 
         Args:
             org_id (int): Organization identifier
@@ -612,7 +641,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List of policy mapping objects
         """
-        return await self._request("GET", f"/v2/organizations/{org_id}/policies")
+        return await self._request("GET", f"/v2/organization/{org_id}/policies")
 
     async def update_organization_policies(
         self, org_id: int, policies: List[Dict]
@@ -628,7 +657,7 @@ class AsyncNinjaRMMClient:
             Updated list of policy mapping objects
         """
         return await self._request(
-            "PUT", f"/v2/organizations/{org_id}/policies", json=policies
+            "PUT", f"/v2/organization/{org_id}/policies", json=policies
         )
 
     async def get_devices(
@@ -723,7 +752,7 @@ class AsyncNinjaRMMClient:
         if expand:
             params["expand"] = expand
 
-        return await self._request("GET", f"/v2/devices/{device_id}", params=params)
+        return await self._request("GET", f"/v2/device/{device_id}", params=params)
 
     async def update_device(self, device_id: int, **kwargs) -> Dict:
         """
@@ -736,16 +765,21 @@ class AsyncNinjaRMMClient:
         Returns:
             Updated device object
         """
-        return await self._request("PATCH", f"/v2/devices/{device_id}", json=kwargs)
+        return await self._request("PATCH", f"/v2/device/{device_id}", json=kwargs)
 
     async def delete_device(self, device_id: int) -> None:
         """
         Delete a device.
 
+        Note:
+            The current public NinjaRMM API spec does not document a DELETE on
+            ``/v2/device/{id}``. This method targets the canonical singular
+            path but may return an HTTP error depending on tenant entitlements.
+
         Args:
             device_id (int): Device identifier
         """
-        await self._request("DELETE", f"/v2/devices/{device_id}")
+        await self._request("DELETE", f"/v2/device/{device_id}")
 
     async def search_devices(
         self,
@@ -785,7 +819,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List of alert objects
         """
-        return await self._request("GET", f"/v2/devices/{device_id}/alerts")
+        return await self._request("GET", f"/v2/device/{device_id}/alerts")
 
     async def get_device_activities(
         self,
@@ -823,12 +857,17 @@ class AsyncNinjaRMMClient:
             params["cursor"] = cursor
 
         return await self._request(
-            "GET", f"/v2/devices/{device_id}/activities", params=params
+            "GET", f"/v2/device/{device_id}/activities", params=params
         )
 
     async def get_device_processes(self, device_id: int) -> List[Dict]:
         """
         Get running processes for a specific device.
+
+        Note:
+            ``/v2/device/{id}/processes`` is not part of the current public
+            NinjaRMM API spec; the method targets the canonical singular path
+            but the endpoint may not be available.
 
         Args:
             device_id (int): Device identifier
@@ -836,11 +875,16 @@ class AsyncNinjaRMMClient:
         Returns:
             List of process objects
         """
-        return await self._request("GET", f"/v2/devices/{device_id}/processes")
+        return await self._request("GET", f"/v2/device/{device_id}/processes")
 
     async def get_device_services(self, device_id: int) -> List[Dict]:
         """
         Get services for a specific device.
+
+        Note:
+            ``/v2/device/{id}/services`` is not part of the current public
+            NinjaRMM API spec. Use :meth:`get_device_windows_services` to hit
+            the documented ``/v2/device/{id}/windows-services`` endpoint.
 
         Args:
             device_id (int): Device identifier
@@ -848,7 +892,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List of service objects
         """
-        return await self._request("GET", f"/v2/devices/{device_id}/services")
+        return await self._request("GET", f"/v2/device/{device_id}/services")
 
     async def get_device_software(self, device_id: int) -> List[Dict]:
         """
@@ -860,7 +904,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List of software objects
         """
-        return await self._request("GET", f"/v2/devices/{device_id}/software")
+        return await self._request("GET", f"/v2/device/{device_id}/software")
 
     async def get_device_volumes(self, device_id: int) -> List[Dict]:
         """
@@ -872,11 +916,14 @@ class AsyncNinjaRMMClient:
         Returns:
             List of volume objects
         """
-        return await self._request("GET", f"/v2/devices/{device_id}/volumes")
+        return await self._request("GET", f"/v2/device/{device_id}/volumes")
 
     async def enable_maintenance_mode(self, device_id: int, duration: int) -> Dict:
         """
-        Enable maintenance mode for a device.
+        Enable maintenance mode for a device for the next ``duration`` seconds.
+
+        Thin convenience wrapper around :meth:`set_device_maintenance` that
+        derives the maintenance window end timestamp from ``duration``.
 
         Args:
             device_id (int): Device identifier
@@ -885,8 +932,9 @@ class AsyncNinjaRMMClient:
         Returns:
             Updated device maintenance status
         """
+        end = time.time() + duration
         return await self._request(
-            "POST", f"/v2/devices/{device_id}/maintenance", json={"duration": duration}
+            "PUT", f"/v2/device/{device_id}/maintenance", json={"end": end}
         )
 
     async def disable_maintenance_mode(self, device_id: int) -> None:
@@ -896,7 +944,7 @@ class AsyncNinjaRMMClient:
         Args:
             device_id (int): Device identifier
         """
-        await self._request("DELETE", f"/v2/devices/{device_id}/maintenance")
+        await self._request("DELETE", f"/v2/device/{device_id}/maintenance")
 
     async def get_custom_fields_policy_conditions(self, policy_id: int) -> List[Dict]:
         """
@@ -2757,6 +2805,10 @@ class AsyncNinjaRMMClient:
         """
         Update a single organization document.
 
+        The public NinjaRMM API only exposes a bulk ``PATCH /v2/organization/documents``
+        endpoint, so this method wraps it with a one-element payload and
+        returns the first (and only) updated document.
+
         Args:
             document_id (int): Document identifier
             document_name (str, optional): Document name
@@ -2766,7 +2818,7 @@ class AsyncNinjaRMMClient:
         Returns:
             Dict: Updated organization document
         """
-        document = {}
+        document: Dict[str, Any] = {"documentId": document_id}
 
         if document_name is not None:
             document["documentName"] = document_name
@@ -2775,12 +2827,10 @@ class AsyncNinjaRMMClient:
         if fields is not None:
             if not isinstance(fields, dict):
                 raise ValueError("fields must be a dictionary")
-            # Remove None values from fields
             document["fields"] = {k: v for k, v in fields.items() if v is not None}
 
-        return await self._request(
-            "PATCH", f"/v2/organization/documents/{document_id}", json=document
-        )
+        updated = await self.update_organization_documents([document])
+        return updated[0] if updated else {}
 
     async def update_document_template(
         self,
@@ -2833,7 +2883,9 @@ class AsyncNinjaRMMClient:
                 raise ValueError("allowed_technician_roles must be a list of integers")
             data["allowedTechnicianRoles"] = allowed_technician_roles
 
-        return await self._request("PUT", f"/v2/templates/{template_id}", json=data)
+        return await self._request(
+            "PUT", f"/v2/document-templates/{template_id}", json=data
+        )
 
     async def get_all_organization_documents(
         self,

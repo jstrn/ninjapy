@@ -86,16 +86,36 @@ class SyncRunner:
 def sync_iterator_from_async(
     async_iterator: AsyncIterator[T], runner: SyncRunner
 ) -> Iterator[T]:
-    """Bridge an async iterator into a synchronous iterator."""
+    """Bridge an async iterator into a synchronous iterator.
 
-    async def _drain() -> list[T]:
-        items: list[T] = []
-        async for item in async_iterator:
-            items.append(item)
-        return items
+    Pulls one item at a time from the underlying async iterator so memory
+    usage stays bounded regardless of how many items are produced.
+    """
+    sentinel: Any = object()
 
-    for item in runner.run(_drain()):
-        yield item
+    async def _next() -> Any:
+        try:
+            return await async_iterator.__anext__()
+        except StopAsyncIteration:
+            return sentinel
+
+    try:
+        while True:
+            item = runner.run(_next())
+            if item is sentinel:
+                return
+            yield item
+    finally:
+        async def _aclose() -> None:
+            aclose = getattr(async_iterator, "aclose", None)
+            if aclose is not None:
+                await aclose()
+
+        try:
+            runner.run(_aclose())
+        except RuntimeError:
+            # Runner already closed or running-loop guard tripped during teardown.
+            pass
 
 
 def wrap_async_method(

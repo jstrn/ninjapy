@@ -7,8 +7,12 @@ from aioresponses import aioresponses
 
 from ninjapy.client import AsyncNinjaRMMClient
 from tests.conftest import (
+    get_request_url,
     mock_get,
+    mock_patch,
     mock_post,
+    mock_put,
+    mock_delete,
     patch_valid_token,
     patch_valid_token_async,
 )
@@ -247,3 +251,68 @@ def test_create_organization_document_sync_wrapper_returns_single_document(
         )
 
     assert result == created_document
+
+
+@pytest.mark.asyncio
+async def test_device_endpoints_use_singular_path(async_client, aioresponses):
+    """Per-device endpoints must hit ``/v2/device/{id}/...`` (not plural)."""
+    base = async_client.base_url
+    device_id = 42
+
+    mock_get(aioresponses, f"{base}/v2/device/{device_id}", payload={"id": device_id})
+    mock_patch(aioresponses, f"{base}/v2/device/{device_id}", payload={"id": device_id})
+    mock_get(aioresponses, f"{base}/v2/device/{device_id}/alerts", payload=[])
+    mock_get(aioresponses, f"{base}/v2/device/{device_id}/activities", payload={})
+    mock_get(aioresponses, f"{base}/v2/device/{device_id}/software", payload=[])
+    mock_get(aioresponses, f"{base}/v2/device/{device_id}/volumes", payload=[])
+
+    with patch_valid_token_async(async_client):
+        await async_client.get_device(device_id)
+        await async_client.update_device(device_id, displayName="x")
+        await async_client.get_device_alerts(device_id)
+        await async_client.get_device_activities(device_id)
+        await async_client.get_device_software(device_id)
+        await async_client.get_device_volumes(device_id)
+
+
+@pytest.mark.asyncio
+async def test_enable_maintenance_mode_uses_put_singular(async_client, aioresponses):
+    """``enable_maintenance_mode`` must PUT to singular path with ``end`` in body."""
+    base = async_client.base_url
+    device_id = 7
+
+    mock_put(
+        aioresponses,
+        f"{base}/v2/device/{device_id}/maintenance",
+        status=200,
+        payload={"ok": True},
+    )
+
+    with patch_valid_token_async(async_client):
+        await async_client.enable_maintenance_mode(device_id, duration=3600)
+
+    # First (and only) captured request key encodes method + URL.
+    request_key = next(iter(aioresponses.requests.keys()))
+    method, url = request_key[0], str(request_key[1])
+    assert method == "PUT"
+    assert url.endswith(f"/v2/device/{device_id}/maintenance")
+
+
+@pytest.mark.asyncio
+async def test_disable_maintenance_mode_uses_singular_delete(async_client, aioresponses):
+    base = async_client.base_url
+    device_id = 7
+
+    mock_delete(
+        aioresponses,
+        f"{base}/v2/device/{device_id}/maintenance",
+        status=204,
+    )
+
+    with patch_valid_token_async(async_client):
+        await async_client.disable_maintenance_mode(device_id)
+
+    request_key = next(iter(aioresponses.requests.keys()))
+    method, url = request_key[0], str(request_key[1])
+    assert method == "DELETE"
+    assert url.endswith(f"/v2/device/{device_id}/maintenance")

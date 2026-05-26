@@ -138,7 +138,7 @@ class TestNinjaRMMClient:
 
         mock_get(
             aioresponses,
-            f"{self.base_url}/v2/devices/1",
+            f"{self.base_url}/v2/device/1",
             payload=mock_device,
             status=200,
         )
@@ -190,7 +190,7 @@ class TestNinjaRMMClient:
         """Test API error handling for non-auth errors."""
         mock_get(
             aioresponses,
-            f"{self.base_url}/v2/devices/999",
+            f"{self.base_url}/v2/device/999",
             payload={"message": "Device not found"},
             status=404,
         )
@@ -278,7 +278,7 @@ class TestNinjaRMMClient:
 
     def test_no_content_response(self, aioresponses):
         """Test handling of 204 No Content responses."""
-        mock_delete(aioresponses, f"{self.base_url}/v2/organizations/123", status=204)
+        mock_delete(aioresponses, f"{self.base_url}/v2/organization/123", status=204)
 
         with patch_valid_token(self.client):
             result = self.client.delete_organization(123)

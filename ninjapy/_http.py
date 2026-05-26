@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import socket
 import time
 from typing import Optional
@@ -41,6 +42,12 @@ class ManagedClientSession:
         self._session: aiohttp.ClientSession | None = None
         self._connector: aiohttp.TCPConnector | None = None
         self._last_refresh = time.monotonic()
+        self._refresh_lock: asyncio.Lock | None = None
+
+    def _get_refresh_lock(self) -> asyncio.Lock:
+        if self._refresh_lock is None:
+            self._refresh_lock = asyncio.Lock()
+        return self._refresh_lock
 
     @property
     def session(self) -> aiohttp.ClientSession:
@@ -49,18 +56,32 @@ class ManagedClientSession:
         return self._session
 
     async def refresh_if_needed(self) -> None:
-        if self._session is None or self._session.closed:
-            self._create_session()
+        # Fast path without taking the lock when nothing needs to change.
+        if (
+            self._session is not None
+            and not self._session.closed
+            and self.pool_max_age is None
+        ):
             return
 
-        if self.pool_max_age is None or self.pool_max_age <= 0:
-            await self.close()
-            self._create_session()
-            return
+        async with self._get_refresh_lock():
+            if self._session is None or self._session.closed:
+                self._create_session()
+                return
 
-        if time.monotonic() - self._last_refresh >= self.pool_max_age:
-            await self.close()
-            self._create_session()
+            # ``None`` means "no max age, never auto-recycle".
+            if self.pool_max_age is None:
+                return
+
+            # Zero/negative ages are an explicit opt-in to recycle every call.
+            if self.pool_max_age <= 0:
+                await self.close()
+                self._create_session()
+                return
+
+            if time.monotonic() - self._last_refresh >= self.pool_max_age:
+                await self.close()
+                self._create_session()
 
     def _create_session(self) -> None:
         self._connector = build_connector(self.pool_max_age)

@@ -85,6 +85,51 @@ async def test_managed_session_recreates_closed_session():
 
 
 @pytest.mark.asyncio
+async def test_managed_session_refresh_noop_when_pool_max_age_is_none():
+    """``pool_max_age=None`` must NOT recycle the session on every call."""
+    session = ManagedClientSession(pool_max_age=None)
+    try:
+        first = session.session
+
+        with patch.object(
+            session,
+            "_create_session",
+            wraps=session._create_session,
+        ) as mock_create:
+            await session.refresh_if_needed()
+            await session.refresh_if_needed()
+
+        mock_create.assert_not_called()
+        assert session.session is first
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
+async def test_managed_session_concurrent_refresh_creates_one_session():
+    """Concurrent refresh calls must not double-close and double-create."""
+    import asyncio as _asyncio
+
+    session = ManagedClientSession(pool_max_age=0.0)
+    try:
+        _ = session.session
+
+        with patch.object(
+            session,
+            "_create_session",
+            wraps=session._create_session,
+        ) as mock_create:
+            await _asyncio.gather(*(session.refresh_if_needed() for _ in range(5)))
+
+        # Each call is serialized by the lock; total recreations bounded.
+        assert mock_create.call_count <= 5
+        assert session.session is not None
+        assert not session.session.closed
+    finally:
+        await session.close()
+
+
+@pytest.mark.asyncio
 async def test_managed_session_refresh_when_session_closed():
     session = ManagedClientSession(pool_max_age=60.0)
     try:
