@@ -115,9 +115,8 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
+        name: dist
         path: dist/
-        pattern: dist/*
-        merge-multiple: true
 
     - name: Publish to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -148,9 +147,8 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
+        name: dist
         path: dist/
-        pattern: dist/*
-        merge-multiple: true
 
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
@@ -177,9 +175,8 @@ jobs:
     - name: Download build artifacts
       uses: actions/download-artifact@v4
       with:
+        name: dist
         path: dist/
-        pattern: dist/*
-        merge-multiple: true
 
     - name: Generate changelog
       id: changelog
