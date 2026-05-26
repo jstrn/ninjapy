@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-26
+
+### Fixed
+- `ManagedClientSession.refresh_if_needed()` now treats `pool_max_age=None` as "never auto-recycle" instead of recreating the aiohttp session on every request (logic inversion regression from the async migration).
+- `ManagedClientSession.refresh_if_needed()` is now concurrency-safe: refresh decisions are serialized through an `asyncio.Lock` so concurrent requests no longer race into double-closing the underlying session.
+- `sync_iterator_from_async()` (which backs every `iter_*` method on the sync `NinjaRMMClient`) now streams items lazily instead of eagerly draining the entire async generator into memory.
+- Corrected the URL path for the per-device endpoint family to the spec-compliant singular form `/v2/device/{id}/…`: `get_device`, `update_device`, `delete_device`, `get_device_alerts`, `get_device_activities`, `get_device_processes`, `get_device_services`, `get_device_software`, `get_device_volumes`, `enable_maintenance_mode`, `disable_maintenance_mode`.
+- `enable_maintenance_mode()` now issues `PUT /v2/device/{id}/maintenance` with the spec-compliant `{"end": <epoch>}` body derived from `duration` (previously `POST … {"duration": n}` — wrong verb, wrong path, wrong body shape).
+- Corrected the URL path for the per-organization endpoint family to the spec-compliant singular form `/v2/organization/{id}/…`: `delete_organization`, `get_organization_settings`, `update_organization_settings`, `get_organization_locations`, `create_organization_location`, `update_organization_location`, `delete_organization_location`, `get_organization_policies`, `update_organization_policies`.
+- `update_document_template()` now targets the spec-compliant `PUT /v2/document-templates/{id}` (was `PUT /v2/templates/{id}`, which is not in the spec).
+- `update_organization_document()` now wraps the documented bulk `PATCH /v2/organization/documents` endpoint with a one-element payload and returns the first updated document (the single-document path it previously hit is not in the spec).
+- Docstrings on methods whose endpoints are not in the current public NinjaRMM API spec now call that out explicitly.
+
 ## [0.2.2] - 2026-05-26
 
 ### Fixed
