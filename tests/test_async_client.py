@@ -6,21 +6,12 @@ import pytest
 from aioresponses import aioresponses
 
 from ninjapy.client import AsyncNinjaRMMClient
-from tests.conftest import mock_get, patch_valid_token, patch_valid_token_async
-
-
-@pytest.fixture
-def async_client():
-    with patch("ninjapy.client.AsyncTokenManager") as mock_cls:
-        mock_cls.return_value.get_valid_token = AsyncMock(return_value="test_token")
-        mock_cls.return_value.close = AsyncMock()
-        yield AsyncNinjaRMMClient(
-            token_url="https://test.ninjarmm.com/oauth/token",
-            client_id="test_client_id",
-            client_secret="test_client_secret",
-            scope="monitoring management control",
-            base_url="https://test.ninjarmm.com",
-        )
+from tests.conftest import (
+    mock_get,
+    mock_post,
+    patch_valid_token,
+    patch_valid_token_async,
+)
 
 
 @pytest.mark.asyncio
@@ -39,18 +30,12 @@ async def test_async_get_organizations(async_client, aioresponses):
 
 
 @pytest.mark.asyncio
-async def test_async_context_manager_closes_session(aioresponses):
+async def test_async_context_manager_closes_session(aioresponses, client_kwargs):
     with patch("ninjapy.client.AsyncTokenManager") as mock_cls:
         mock_cls.return_value.get_valid_token = AsyncMock(return_value="test_token")
         mock_cls.return_value.close = AsyncMock()
 
-        async with AsyncNinjaRMMClient(
-            token_url="https://test.ninjarmm.com/oauth/token",
-            client_id="id",
-            client_secret="secret",
-            scope="monitoring management control",
-            base_url="https://test.ninjarmm.com",
-        ) as client:
+        async with AsyncNinjaRMMClient(**client_kwargs) as client:
             assert client is not None
 
         mock_cls.return_value.close.assert_called()
@@ -192,3 +177,56 @@ async def test_query_custom_fields_by_org(async_client, aioresponses):
 
     assert len(records) == 2
     assert records[0]["systemName"] == "HOST-1"
+
+
+@pytest.mark.asyncio
+async def test_async_create_organization_document_returns_single_document(
+    async_client, aioresponses
+):
+    base_url = async_client.base_url
+    created_document = {
+        "documentId": 123,
+        "documentName": "Audit",
+        "organizationId": 9,
+    }
+    mock_post(
+        aioresponses,
+        f"{base_url}/v2/organization/documents",
+        payload=[created_document],
+        status=200,
+    )
+
+    with patch_valid_token_async(async_client):
+        result = await async_client.create_organization_document(
+            organization_id=9,
+            document_template_id=42,
+            document_name="Audit",
+        )
+
+    assert result == created_document
+
+
+def test_create_organization_document_sync_wrapper_returns_single_document(
+    client, aioresponses
+):
+    base_url = client.base_url
+    created_document = {
+        "documentId": 123,
+        "documentName": "Audit",
+        "organizationId": 9,
+    }
+    mock_post(
+        aioresponses,
+        f"{base_url}/v2/organization/documents",
+        payload=[created_document],
+        status=200,
+    )
+
+    with patch_valid_token(client):
+        result = client.create_organization_document(
+            organization_id=9,
+            document_template_id=42,
+            document_name="Audit",
+        )
+
+    assert result == created_document

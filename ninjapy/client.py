@@ -2705,7 +2705,7 @@ class AsyncNinjaRMMClient:
             document["fields"] = {k: v for k, v in fields.items() if v is not None}
 
         # Create a single document using the bulk endpoint
-        return self.create_organization_documents([document])[0]
+        return (await self.create_organization_documents([document]))[0]
 
     async def update_organization_documents(self, documents: List[Dict]) -> List[Dict]:
         """

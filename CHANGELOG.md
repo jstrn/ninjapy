@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-26
+
+### Fixed
+- `create_organization_document()` now returns the created document dict in async and sync usage, matching the pre-async sync method shape.
+
 ## [0.2.0] - 2026-05-22
 
 ### Added
@@ -123,7 +128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Related items management not yet implemented
 - Vulnerability scanning not yet implemented
 
-[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jstrn/ninjapy/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jstrn/ninjapy/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jstrn/ninjapy/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jstrn/ninjapy/compare/v0.1.2...v0.1.3
