@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-22
+
+### Added
+- Native async client (`AsyncNinjaRMMClient`) backed by `aiohttp`
+- Async pagination helpers: `paginate_after`, `paginate_cursor`, `collect_all`, `map_concurrent`
+- Sync `NinjaRMMClient` wrapper for backward-compatible synchronous usage
+- `get_devices_by_org()` for concurrent device fetching grouped by organization
+- `get_organizations_by_org()` for concurrent organization detail fetching by org ID
+- Runtime dependencies on `pandas` and `tqdm` for data processing and progress display
+
 ### Changed
-- Raised dependency floors to clear current GitHub security alerts in `uv.lock`, including `requests>=2.33.0`, `pytest>=9.0.3`, `cryptography>=46.0.7`, and `Pygments>=2.20.0` for the relevant runtime, test, and tooling surfaces
+- Replaced `requests`/`urllib3` runtime dependencies with `aiohttp>=3.12.14`
+- HTTP transport now uses aiohttp session pooling with configurable pool refresh
+- OAuth token management now uses async locking via `AsyncTokenManager`
+- Device endpoints now map `org_filter` to the API `df` query parameter (`org={id}`)
+- Tests migrated from `responses` to `aioresponses`
+
+### Removed
+- Direct dependency on `requests` and `urllib3`
+- `ExpiringHTTPAdapter` requests/urllib3 session adapter
 
 ## [0.1.4] - 2026-04-22
 
@@ -105,7 +123,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Related items management not yet implemented
 - Vulnerability scanning not yet implemented
 
-[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/jstrn/ninjapy/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jstrn/ninjapy/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/jstrn/ninjapy/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/jstrn/ninjapy/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/jstrn/ninjapy/compare/v0.1.1...v0.1.2

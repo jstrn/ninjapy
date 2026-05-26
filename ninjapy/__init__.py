@@ -1,6 +1,7 @@
 from importlib.metadata import version
 
-from .client import NinjaRMMClient
+from .async_helpers import collect_all, map_concurrent, paginate_after, paginate_cursor
+from .client import AsyncNinjaRMMClient, NinjaRMMClient
 from .exceptions import NinjaRMMAuthError, NinjaRMMError
 from .utils import (
     convert_epoch_to_iso,
@@ -12,9 +13,14 @@ from .utils import (
 
 __version__ = version("ninjapy")
 __all__ = [
+    "AsyncNinjaRMMClient",
     "NinjaRMMClient",
     "NinjaRMMError",
     "NinjaRMMAuthError",
+    "collect_all",
+    "map_concurrent",
+    "paginate_after",
+    "paginate_cursor",
     "convert_epoch_to_iso",
     "is_timestamp_field",
     "is_epoch_timestamp",

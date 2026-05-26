@@ -1,28 +1,26 @@
+import asyncio
+import inspect
 import logging
-import time
-from typing import (
-    Any,
-    Callable,
-    Dict,
-    Generator,
-    Iterator,
-    List,
-    Literal,
-    Optional,
-    Union,
-)
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from typing import Any, Dict, List, Literal, Optional, Union
 
-import requests
-from urllib3.util.retry import Retry
+import aiohttp
 
-from .auth import TokenManager
+from .async_helpers import collect_all, map_concurrent, paginate_after, paginate_cursor
+from .auth import AsyncTokenManager, TokenManager
 from .exceptions import (
     NinjaRMMAPIError,
     NinjaRMMAuthError,
     NinjaRMMError,
     NinjaRMMValidationError,
 )
-from ._session import ExpiringHTTPAdapter
+from ._http import ManagedClientSession, build_client_timeout
+from ._sync import (
+    SyncRunner,
+    is_public_async_method,
+    wrap_async_iterator_method,
+    wrap_async_method,
+)
 from .utils import process_api_response
 
 # Configure logging
@@ -34,7 +32,7 @@ logger = logging.getLogger("ninjapy.client")
 RequestTimeout = Union[int, float, tuple[Union[int, float], Union[int, float]]]
 
 
-class NinjaRMMClient:
+class AsyncNinjaRMMClient:
     """
     Client for interacting with the NinjaRMM API v2.0.9-draft
 
@@ -140,62 +138,29 @@ class NinjaRMMClient:
             504,
         ]
         self.rate_limit_default_retry_after = rate_limit_default_retry_after
-        self.token_manager = TokenManager(token_url, client_id, client_secret, scope)
-        self.session = requests.Session()
-        self.session.headers.update(
-            {"Content-Type": "application/json", "Accept": "application/json"}
+        self.token_manager = AsyncTokenManager(
+            token_url, client_id, client_secret, scope
         )
-
-        # Configure retries with exponential backoff
-        retries = Retry(
-            total=self.retry_total,
-            backoff_factor=self.retry_backoff_factor,
-            status_forcelist=self.retry_status_forcelist,
-            allowed_methods=[
-                "HEAD",
-                "GET",
-                "OPTIONS",
-                "POST",
-                "PUT",
-                "PATCH",
-                "DELETE",
-            ],
-        )
-        adapter = ExpiringHTTPAdapter(
-            max_retries=retries,
+        self._client_timeout = build_client_timeout(request_timeout)
+        self._http = ManagedClientSession(
             pool_max_age=pool_max_age,
+            timeout=self._client_timeout,
         )
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
+        self._retry_attempt = 0
 
-    def _request(
+    async def _request(
         self,
         method: Literal["GET", "POST", "PUT", "PATCH", "DELETE"],
         endpoint: str,
         **kwargs: Any,
     ) -> Any:
-        """
-        Make a request to the API.
-
-        Args:
-            method: HTTP method
-            endpoint: API endpoint
-            **kwargs: Additional arguments to pass to requests
-
-        Returns:
-            The JSON response from the API
-
-        Raises:
-            NinjaRMMAuthError: If authentication fails
-            NinjaRMMError: If any other error occurs
-        """
-        # Ensure endpoint starts with /
+        """Make a request to the API."""
         if not endpoint.startswith("/"):
             endpoint = f"/{endpoint}"
 
-        # Get valid token before each request
-        token = self.token_manager.get_valid_token()
-        self.session.headers.update(
+        token = await self.token_manager.get_valid_token()
+        await self._http.refresh_if_needed()
+        self._http.update_headers(
             {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -204,72 +169,104 @@ class NinjaRMMClient:
         )
 
         url = f"{self.base_url}{endpoint}"
-        logger.info(f"Preparing request: {method} {url} with kwargs: {kwargs}")
+        logger.info("Preparing request: %s %s with kwargs: %s", method, url, kwargs)
 
-        try:
-            logger.info("Sending HTTP request now...")
-            # Explicitly set a timeout to prevent indefinite hangs
-            response = self.session.request(
-                method, url, timeout=self.request_timeout, **kwargs
-            )
-            logger.info(
-                f"HTTP request completed with status code: " f"{response.status_code}"
-            )
-
-            # Handle rate limiting explicitly
-            if response.status_code == 429:
-                retry_after = int(
-                    response.headers.get(
-                        "Retry-After", self.rate_limit_default_retry_after
-                    )
-                )
-                logger.warning(f"Rate limited. Retrying after {retry_after} seconds.")
-                time.sleep(retry_after)
-                return self._request(method, endpoint, **kwargs)
-
-            response.raise_for_status()
-
-            if response.status_code == 204:
-                logger.info("Received 204 No Content response.")
-                return None
-
-            logger.info("Parsing JSON response.")
-            response_data = response.json()
-
-            # Apply timestamp conversion if enabled
-            if self.convert_timestamps:
-                response_data = process_api_response(
-                    response_data, convert_timestamps=True
-                )
-
-            return response_data
-
-        except requests.exceptions.Timeout:
-            logger.error("Request timed out.")
-            raise NinjaRMMError("Request timed out.")
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTPError encountered: {str(e)}")
+        attempt = 0
+        max_attempts = self.retry_total + 1
+        while attempt < max_attempts:
+            attempt += 1
             try:
-                error_data = e.response.json()
-                message = error_data.get("message", str(e))
-            except ValueError:
-                message = str(e)
-                error_data = None
+                logger.info("Sending HTTP request now...")
+                async with self._http.session.request(
+                    method,
+                    url,
+                    timeout=self._client_timeout,
+                    **kwargs,
+                ) as response:
+                    logger.info(
+                        "HTTP request completed with status code: %s", response.status
+                    )
 
-            if e.response.status_code == 401:
-                raise NinjaRMMAuthError("Authentication failed")
-            elif e.response.status_code == 403:
-                raise NinjaRMMError("Permission denied")
-            elif e.response.status_code == 404:
-                raise NinjaRMMError("Resource not found")
-            else:
-                raise NinjaRMMAPIError(message, e.response.status_code, error_data)
+                    if response.status == 429:
+                        retry_after = int(
+                            response.headers.get(
+                                "Retry-After", self.rate_limit_default_retry_after
+                            )
+                        )
+                        logger.warning(
+                            "Rate limited. Retrying after %s seconds.", retry_after
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"RequestException encountered: {str(e)}")
-            raise NinjaRMMError(f"Request failed: {str(e)}")
+                    if (
+                        response.status in self.retry_status_forcelist
+                        and attempt < max_attempts
+                    ):
+                        backoff = self.retry_backoff_factor * (2 ** (attempt - 1))
+                        logger.warning(
+                            "Retrying %s after status %s (attempt %s/%s)",
+                            url,
+                            response.status,
+                            attempt,
+                            max_attempts,
+                        )
+                        await asyncio.sleep(backoff)
+                        continue
 
-    def get_organizations(
+                    if response.status >= 400:
+                        try:
+                            error_data = await response.json()
+                            message = error_data.get("message", response.reason)
+                        except (aiohttp.ContentTypeError, ValueError):
+                            message = response.reason or str(response.status)
+                            error_data = None
+
+                        if response.status == 401:
+                            raise NinjaRMMAuthError("Authentication failed")
+                        if response.status == 403:
+                            raise NinjaRMMError("Permission denied")
+                        if response.status == 404:
+                            raise NinjaRMMError("Resource not found")
+                        raise NinjaRMMAPIError(message, response.status, error_data)
+
+                    if response.status == 204:
+                        logger.info("Received 204 No Content response.")
+                        return None
+
+                    logger.info("Parsing JSON response.")
+                    try:
+                        response_data = await response.json()
+                    except (aiohttp.ContentTypeError, ValueError) as exc:
+                        raise NinjaRMMError(
+                            f"Failed to parse JSON response: {exc}"
+                        ) from exc
+
+                    if self.convert_timestamps:
+                        response_data = process_api_response(
+                            response_data, convert_timestamps=True
+                        )
+
+                    return response_data
+
+            except asyncio.TimeoutError:
+                if attempt < max_attempts:
+                    backoff = self.retry_backoff_factor * (2 ** (attempt - 1))
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error("Request timed out.")
+                raise NinjaRMMError("Request timed out.")
+            except aiohttp.ClientError as exc:
+                if attempt < max_attempts:
+                    backoff = self.retry_backoff_factor * (2 ** (attempt - 1))
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error("RequestException encountered: %s", exc)
+                raise NinjaRMMError(f"Request failed: {exc}") from exc
+
+        raise NinjaRMMError(f"Request failed after {max_attempts} attempts")
+
+    async def get_organizations(
         self,
         page_size: Optional[int] = None,
         after: Optional[int] = None,
@@ -294,9 +291,9 @@ class NinjaRMMClient:
         if org_filter:
             params["of"] = org_filter
 
-        return self._request("GET", "/v2/organizations", params=params)
+        return await self._request("GET", "/v2/organizations", params=params)
 
-    def get_organizations_detailed(
+    async def get_organizations_detailed(
         self,
         page_size: Optional[int] = None,
         after: Optional[int] = None,
@@ -329,9 +326,9 @@ class NinjaRMMClient:
         if org_filter:
             params["of"] = org_filter
 
-        return self._request("GET", "/v2/organizations-detailed", params=params)
+        return await self._request("GET", "/v2/organizations-detailed", params=params)
 
-    def create_organization(
+    async def create_organization(
         self,
         name: str,
         description: Optional[str] = None,
@@ -366,9 +363,11 @@ class NinjaRMMClient:
         if template_org_id:
             params["templateOrganizationId"] = template_org_id
 
-        return self._request("POST", "/v2/organizations", json=data, params=params)
+        return await self._request(
+            "POST", "/v2/organizations", json=data, params=params
+        )
 
-    def approve_devices(self, device_ids: List[int]) -> None:
+    async def approve_devices(self, device_ids: List[int]) -> None:
         """
         Approve devices that are waiting for approval.
 
@@ -376,9 +375,9 @@ class NinjaRMMClient:
             device_ids (List[int]): List of device IDs to approve
         """
         data = {"devices": device_ids}
-        self._request("POST", "/v2/devices/approval/APPROVE", json=data)
+        await self._request("POST", "/v2/devices/approval/APPROVE", json=data)
 
-    def reject_devices(self, device_ids: List[int]) -> None:
+    async def reject_devices(self, device_ids: List[int]) -> None:
         """
         Reject devices that are waiting for approval.
 
@@ -386,18 +385,18 @@ class NinjaRMMClient:
             device_ids (List[int]): List of device IDs to reject
         """
         data = {"devices": device_ids}
-        self._request("POST", "/v2/devices/approval/REJECT", json=data)
+        await self._request("POST", "/v2/devices/approval/REJECT", json=data)
 
-    def reset_alert(self, alert_uid: str) -> None:
+    async def reset_alert(self, alert_uid: str) -> None:
         """
         Reset an alert/condition by UID.
 
         Args:
             alert_uid (str): Alert/condition UID
         """
-        self._request("DELETE", f"/v2/alert/{alert_uid}")
+        await self._request("DELETE", f"/v2/alert/{alert_uid}")
 
-    def reset_alert_with_data(self, alert_uid: str, activity_data: Dict) -> None:
+    async def reset_alert_with_data(self, alert_uid: str, activity_data: Dict) -> None:
         """
         Reset an alert/condition and provide custom data for activity.
 
@@ -405,9 +404,9 @@ class NinjaRMMClient:
             alert_uid (str): Alert/condition UID
             activity_data (Dict): Custom activity data
         """
-        self._request("POST", f"/v2/alert/{alert_uid}/reset", json=activity_data)
+        await self._request("POST", f"/v2/alert/{alert_uid}/reset", json=activity_data)
 
-    def get_organization(self, org_id: int) -> Dict:
+    async def get_organization(self, org_id: int) -> Dict:
         """
         Get a specific organization by ID.
 
@@ -417,9 +416,9 @@ class NinjaRMMClient:
         Returns:
             Organization object
         """
-        return self._request("GET", f"/v2/organizations/{org_id}")
+        return await self._request("GET", f"/v2/organizations/{org_id}")
 
-    def update_organization(
+    async def update_organization(
         self,
         org_id: int,
         name: Optional[str] = None,
@@ -469,9 +468,9 @@ class NinjaRMMClient:
         if fields is not None:
             data["fields"] = fields
 
-        return self._request("PATCH", f"/v2/organization/{org_id}", json=data)
+        return await self._request("PATCH", f"/v2/organization/{org_id}", json=data)
 
-    def delete_organization(self, org_id: int) -> None:
+    async def delete_organization(self, org_id: int) -> None:
         """
         Delete an organization.
 
@@ -485,9 +484,9 @@ class NinjaRMMClient:
                 - 404: Organization not found
                 - 409: Organization has active devices
         """
-        self._request("DELETE", f"/v2/organizations/{org_id}")
+        await self._request("DELETE", f"/v2/organizations/{org_id}")
 
-    def get_organization_settings(self, org_id: int) -> Dict:
+    async def get_organization_settings(self, org_id: int) -> Dict:
         """
         Get organization settings.
 
@@ -497,9 +496,9 @@ class NinjaRMMClient:
         Returns:
             Organization settings object
         """
-        return self._request("GET", f"/v2/organizations/{org_id}/settings")
+        return await self._request("GET", f"/v2/organizations/{org_id}/settings")
 
-    def update_organization_settings(self, org_id: int, settings: Dict) -> Dict:
+    async def update_organization_settings(self, org_id: int, settings: Dict) -> Dict:
         """
         Update organization settings.
 
@@ -511,11 +510,11 @@ class NinjaRMMClient:
         Returns:
             Updated organization settings
         """
-        return self._request(
+        return await self._request(
             "PUT", f"/v2/organizations/{org_id}/settings", json=settings
         )
 
-    def get_organization_locations(self, org_id: int) -> List[Dict]:
+    async def get_organization_locations(self, org_id: int) -> List[Dict]:
         """
         Get organization locations.
 
@@ -525,9 +524,9 @@ class NinjaRMMClient:
         Returns:
             List of location objects
         """
-        return self._request("GET", f"/v2/organizations/{org_id}/locations")
+        return await self._request("GET", f"/v2/organizations/{org_id}/locations")
 
-    def create_organization_location(
+    async def create_organization_location(
         self,
         org_id: int,
         name: str,
@@ -554,9 +553,11 @@ class NinjaRMMClient:
         if description:
             data["description"] = description
 
-        return self._request("POST", f"/v2/organizations/{org_id}/locations", json=data)
+        return await self._request(
+            "POST", f"/v2/organizations/{org_id}/locations", json=data
+        )
 
-    def update_organization_location(
+    async def update_organization_location(
         self,
         org_id: int,
         location_id: int,
@@ -585,11 +586,11 @@ class NinjaRMMClient:
         if description:
             data["description"] = description
 
-        return self._request(
+        return await self._request(
             "PATCH", f"/v2/organizations/{org_id}/locations/{location_id}", json=data
         )
 
-    def delete_organization_location(self, org_id: int, location_id: int) -> None:
+    async def delete_organization_location(self, org_id: int, location_id: int) -> None:
         """
         Delete an organization location.
 
@@ -597,9 +598,11 @@ class NinjaRMMClient:
             org_id (int): Organization identifier
             location_id (int): Location identifier
         """
-        self._request("DELETE", f"/v2/organizations/{org_id}/locations/{location_id}")
+        await self._request(
+            "DELETE", f"/v2/organizations/{org_id}/locations/{location_id}"
+        )
 
-    def get_organization_policies(self, org_id: int) -> List[Dict]:
+    async def get_organization_policies(self, org_id: int) -> List[Dict]:
         """
         Get organization policy mappings.
 
@@ -609,9 +612,9 @@ class NinjaRMMClient:
         Returns:
             List of policy mapping objects
         """
-        return self._request("GET", f"/v2/organizations/{org_id}/policies")
+        return await self._request("GET", f"/v2/organizations/{org_id}/policies")
 
-    def update_organization_policies(
+    async def update_organization_policies(
         self, org_id: int, policies: List[Dict]
     ) -> List[Dict]:
         """
@@ -624,11 +627,11 @@ class NinjaRMMClient:
         Returns:
             Updated list of policy mapping objects
         """
-        return self._request(
+        return await self._request(
             "PUT", f"/v2/organizations/{org_id}/policies", json=policies
         )
 
-    def get_devices(
+    async def get_devices(
         self,
         page_size: Optional[int] = None,
         after: Optional[int] = None,
@@ -655,15 +658,15 @@ class NinjaRMMClient:
         if after:
             params["after"] = after
         if org_filter:
-            params["of"] = org_filter
+            params["df"] = org_filter
         if expand:
             params["expand"] = expand
         if include_backup_usage:
             params["includeBackupUsage"] = "true"
 
-        return self._request("GET", "/v2/devices", params=params)
+        return await self._request("GET", "/v2/devices", params=params)
 
-    def get_devices_detailed(
+    async def get_devices_detailed(
         self,
         page_size: Optional[int] = None,
         after: Optional[int] = None,
@@ -690,15 +693,15 @@ class NinjaRMMClient:
         if after:
             params["after"] = after
         if org_filter:
-            params["of"] = org_filter
+            params["df"] = org_filter
         if expand:
             params["expand"] = expand
         if include_backup_usage:
             params["includeBackupUsage"] = "true"
 
-        return self._request("GET", "/v2/devices-detailed", params=params)
+        return await self._request("GET", "/v2/devices-detailed", params=params)
 
-    def get_device(
+    async def get_device(
         self,
         device_id: int,
         expand: Optional[str] = None,
@@ -720,9 +723,9 @@ class NinjaRMMClient:
         if expand:
             params["expand"] = expand
 
-        return self._request("GET", f"/v2/devices/{device_id}", params=params)
+        return await self._request("GET", f"/v2/devices/{device_id}", params=params)
 
-    def update_device(self, device_id: int, **kwargs) -> Dict:
+    async def update_device(self, device_id: int, **kwargs) -> Dict:
         """
         Update a device.
 
@@ -733,18 +736,18 @@ class NinjaRMMClient:
         Returns:
             Updated device object
         """
-        return self._request("PATCH", f"/v2/devices/{device_id}", json=kwargs)
+        return await self._request("PATCH", f"/v2/devices/{device_id}", json=kwargs)
 
-    def delete_device(self, device_id: int) -> None:
+    async def delete_device(self, device_id: int) -> None:
         """
         Delete a device.
 
         Args:
             device_id (int): Device identifier
         """
-        self._request("DELETE", f"/v2/devices/{device_id}")
+        await self._request("DELETE", f"/v2/devices/{device_id}")
 
-    def search_devices(
+    async def search_devices(
         self,
         query: str,
         page_size: Optional[int] = None,
@@ -770,9 +773,9 @@ class NinjaRMMClient:
             params["cursor"] = cursor
         params.update(kwargs)
 
-        return self._request("GET", "/v2/devices/search", params=params)
+        return await self._request("GET", "/v2/devices/search", params=params)
 
-    def get_device_alerts(self, device_id: int) -> List[Dict]:
+    async def get_device_alerts(self, device_id: int) -> List[Dict]:
         """
         Get alerts for a specific device.
 
@@ -782,9 +785,9 @@ class NinjaRMMClient:
         Returns:
             List of alert objects
         """
-        return self._request("GET", f"/v2/devices/{device_id}/alerts")
+        return await self._request("GET", f"/v2/devices/{device_id}/alerts")
 
-    def get_device_activities(
+    async def get_device_activities(
         self,
         device_id: int,
         start_time: Optional[float] = None,
@@ -819,11 +822,11 @@ class NinjaRMMClient:
         if cursor:
             params["cursor"] = cursor
 
-        return self._request(
+        return await self._request(
             "GET", f"/v2/devices/{device_id}/activities", params=params
         )
 
-    def get_device_processes(self, device_id: int) -> List[Dict]:
+    async def get_device_processes(self, device_id: int) -> List[Dict]:
         """
         Get running processes for a specific device.
 
@@ -833,9 +836,9 @@ class NinjaRMMClient:
         Returns:
             List of process objects
         """
-        return self._request("GET", f"/v2/devices/{device_id}/processes")
+        return await self._request("GET", f"/v2/devices/{device_id}/processes")
 
-    def get_device_services(self, device_id: int) -> List[Dict]:
+    async def get_device_services(self, device_id: int) -> List[Dict]:
         """
         Get services for a specific device.
 
@@ -845,9 +848,9 @@ class NinjaRMMClient:
         Returns:
             List of service objects
         """
-        return self._request("GET", f"/v2/devices/{device_id}/services")
+        return await self._request("GET", f"/v2/devices/{device_id}/services")
 
-    def get_device_software(self, device_id: int) -> List[Dict]:
+    async def get_device_software(self, device_id: int) -> List[Dict]:
         """
         Get installed software for a specific device.
 
@@ -857,9 +860,9 @@ class NinjaRMMClient:
         Returns:
             List of software objects
         """
-        return self._request("GET", f"/v2/devices/{device_id}/software")
+        return await self._request("GET", f"/v2/devices/{device_id}/software")
 
-    def get_device_volumes(self, device_id: int) -> List[Dict]:
+    async def get_device_volumes(self, device_id: int) -> List[Dict]:
         """
         Get disk volumes for a specific device.
 
@@ -869,9 +872,9 @@ class NinjaRMMClient:
         Returns:
             List of volume objects
         """
-        return self._request("GET", f"/v2/devices/{device_id}/volumes")
+        return await self._request("GET", f"/v2/devices/{device_id}/volumes")
 
-    def enable_maintenance_mode(self, device_id: int, duration: int) -> Dict:
+    async def enable_maintenance_mode(self, device_id: int, duration: int) -> Dict:
         """
         Enable maintenance mode for a device.
 
@@ -882,20 +885,20 @@ class NinjaRMMClient:
         Returns:
             Updated device maintenance status
         """
-        return self._request(
+        return await self._request(
             "POST", f"/v2/devices/{device_id}/maintenance", json={"duration": duration}
         )
 
-    def disable_maintenance_mode(self, device_id: int) -> None:
+    async def disable_maintenance_mode(self, device_id: int) -> None:
         """
         Disable maintenance mode for a device.
 
         Args:
             device_id (int): Device identifier
         """
-        self._request("DELETE", f"/v2/devices/{device_id}/maintenance")
+        await self._request("DELETE", f"/v2/devices/{device_id}/maintenance")
 
-    def get_custom_fields_policy_conditions(self, policy_id: int) -> List[Dict]:
+    async def get_custom_fields_policy_conditions(self, policy_id: int) -> List[Dict]:
         """
         Get all custom fields policy conditions for specified policy.
 
@@ -905,9 +908,11 @@ class NinjaRMMClient:
         Returns:
             List of custom fields policy conditions
         """
-        return self._request("GET", f"/v2/policies/{policy_id}/condition/custom-fields")
+        return await self._request(
+            "GET", f"/v2/policies/{policy_id}/condition/custom-fields"
+        )
 
-    def create_custom_fields_policy_condition(
+    async def create_custom_fields_policy_condition(
         self,
         policy_id: int,
         display_name: str,
@@ -934,11 +939,11 @@ class NinjaRMMClient:
         if match_any:
             data["matchAny"] = match_any
 
-        return self._request(
+        return await self._request(
             "POST", f"/v2/policies/{policy_id}/condition/custom-fields", json=data
         )
 
-    def get_custom_fields_policy_condition(
+    async def get_custom_fields_policy_condition(
         self, policy_id: int, condition_id: str
     ) -> Dict:
         """
@@ -951,11 +956,11 @@ class NinjaRMMClient:
         Returns:
             Policy condition details
         """
-        return self._request(
+        return await self._request(
             "GET", f"/v2/policies/{policy_id}/condition/custom-fields/{condition_id}"
         )
 
-    def get_windows_event_conditions(self, policy_id: int) -> List[Dict]:
+    async def get_windows_event_conditions(self, policy_id: int) -> List[Dict]:
         """
         Get all windows event conditions for specified policy.
 
@@ -965,9 +970,11 @@ class NinjaRMMClient:
         Returns:
             List of windows event conditions
         """
-        return self._request("GET", f"/v2/policies/{policy_id}/condition/windows-event")
+        return await self._request(
+            "GET", f"/v2/policies/{policy_id}/condition/windows-event"
+        )
 
-    def create_windows_event_condition(
+    async def create_windows_event_condition(
         self,
         policy_id: int,
         source: str,
@@ -994,11 +1001,13 @@ class NinjaRMMClient:
             "displayName": display_name,
             **kwargs,
         }
-        return self._request(
+        return await self._request(
             "POST", f"/v2/policies/{policy_id}/condition/windows-event", json=data
         )
 
-    def get_windows_event_condition(self, policy_id: int, condition_id: str) -> Dict:
+    async def get_windows_event_condition(
+        self, policy_id: int, condition_id: str
+    ) -> Dict:
         """
         Get specified windows event condition for specified policy.
 
@@ -1009,11 +1018,11 @@ class NinjaRMMClient:
         Returns:
             Windows event condition details
         """
-        return self._request(
+        return await self._request(
             "GET", f"/v2/policies/{policy_id}/condition/windows-event/{condition_id}"
         )
 
-    def delete_policy_condition(self, policy_id: int, condition_id: str) -> None:
+    async def delete_policy_condition(self, policy_id: int, condition_id: str) -> None:
         """
         Deletes specified policy condition from specified agent policy.
 
@@ -1021,9 +1030,11 @@ class NinjaRMMClient:
             policy_id (int): Policy identifier
             condition_id (str): Condition identifier
         """
-        self._request("DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}")
+        await self._request(
+            "DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}"
+        )
 
-    def configure_webhook(
+    async def configure_webhook(
         self,
         url: str,
         activities: Dict[str, List[str]],
@@ -1045,33 +1056,33 @@ class NinjaRMMClient:
         if headers:
             data["headers"] = headers
 
-        self._request("PUT", "/v2/webhook", json=data)
+        await self._request("PUT", "/v2/webhook", json=data)
 
-    def disable_webhook(self) -> None:
+    async def disable_webhook(self) -> None:
         """
         Disables Webhook configuration for current application/client.
         """
-        self._request("DELETE", "/v2/webhook")
+        await self._request("DELETE", "/v2/webhook")
 
-    def list_policies(self) -> List[Dict]:
+    async def list_policies(self) -> List[Dict]:
         """
         List all policies.
 
         Returns:
             List of policy objects
         """
-        return self._request("GET", "/v2/policies")
+        return await self._request("GET", "/v2/policies")
 
-    def list_active_jobs(self) -> List[Dict]:
+    async def list_active_jobs(self) -> List[Dict]:
         """
         List all active jobs.
 
         Returns:
             List of active job objects
         """
-        return self._request("GET", "/v2/jobs")
+        return await self._request("GET", "/v2/jobs")
 
-    def list_activities(
+    async def list_activities(
         self,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
@@ -1104,36 +1115,36 @@ class NinjaRMMClient:
         if cursor:
             params["cursor"] = cursor
 
-        return self._request("GET", "/v2/activities", params=params)
+        return await self._request("GET", "/v2/activities", params=params)
 
-    def list_active_alerts(self) -> List[Dict]:
+    async def list_active_alerts(self) -> List[Dict]:
         """
         List all active alerts (triggered conditions).
 
         Returns:
             List of active alert objects
         """
-        return self._request("GET", "/v2/alerts")
+        return await self._request("GET", "/v2/alerts")
 
-    def list_automation_scripts(self) -> List[Dict]:
+    async def list_automation_scripts(self) -> List[Dict]:
         """
         List all available automation scripts.
 
         Returns:
             List of automation script objects
         """
-        return self._request("GET", "/v2/automation/scripts")
+        return await self._request("GET", "/v2/automation/scripts")
 
-    def list_device_custom_fields(self) -> List[Dict]:
+    async def list_device_custom_fields(self) -> List[Dict]:
         """
         Get all device custom fields.
 
         Returns:
             List of custom field objects
         """
-        return self._request("GET", "/v2/device-custom-fields")
+        return await self._request("GET", "/v2/device-custom-fields")
 
-    def list_devices_detailed(
+    async def list_devices_detailed(
         self, page_size: Optional[int] = None, after: Optional[int] = None
     ) -> List[Dict]:
         """
@@ -1152,54 +1163,54 @@ class NinjaRMMClient:
         if after:
             params["after"] = after
 
-        return self._request("GET", "/v2/devices-detailed", params=params)
+        return await self._request("GET", "/v2/devices-detailed", params=params)
 
-    def list_enabled_notification_channels(self) -> List[Dict]:
+    async def list_enabled_notification_channels(self) -> List[Dict]:
         """
         List all enabled notification channels.
 
         Returns:
             List of enabled notification channel objects
         """
-        return self._request("GET", "/v2/notification-channels/enabled")
+        return await self._request("GET", "/v2/notification-channels/enabled")
 
-    def list_groups(self) -> List[Dict]:
+    async def list_groups(self) -> List[Dict]:
         """
         List all groups (saved searches).
 
         Returns:
             List of group objects
         """
-        return self._request("GET", "/v2/groups")
+        return await self._request("GET", "/v2/groups")
 
-    def list_locations(self) -> List[Dict]:
+    async def list_locations(self) -> List[Dict]:
         """
         List all locations.
 
         Returns:
             List of location objects
         """
-        return self._request("GET", "/v2/locations")
+        return await self._request("GET", "/v2/locations")
 
-    def list_device_roles(self) -> List[Dict]:
+    async def list_device_roles(self) -> List[Dict]:
         """
         List all device roles.
 
         Returns:
             List of device role objects
         """
-        return self._request("GET", "/v2/roles")
+        return await self._request("GET", "/v2/roles")
 
-    def list_notification_channels(self) -> List[Dict]:
+    async def list_notification_channels(self) -> List[Dict]:
         """
         List all notification channels.
 
         Returns:
             List of notification channel objects
         """
-        return self._request("GET", "/v2/notification-channels")
+        return await self._request("GET", "/v2/notification-channels")
 
-    def list_organizations_detailed(
+    async def list_organizations_detailed(
         self, page_size: Optional[int] = None, after: Optional[int] = None
     ) -> List[Dict]:
         """
@@ -1218,36 +1229,36 @@ class NinjaRMMClient:
         if after:
             params["after"] = after
 
-        return self._request("GET", "/v2/organizations-detailed", params=params)
+        return await self._request("GET", "/v2/organizations-detailed", params=params)
 
-    def list_scheduled_tasks(self) -> List[Dict]:
+    async def list_scheduled_tasks(self) -> List[Dict]:
         """
         List all scheduled tasks.
 
         Returns:
             List of scheduled task objects
         """
-        return self._request("GET", "/v2/tasks")
+        return await self._request("GET", "/v2/tasks")
 
-    def list_software_products(self) -> List[Dict]:
+    async def list_software_products(self) -> List[Dict]:
         """
         List all supported 3rd party software.
 
         Returns:
             List of software product objects
         """
-        return self._request("GET", "/v2/software-products")
+        return await self._request("GET", "/v2/software-products")
 
-    def list_users(self) -> List[Dict]:
+    async def list_users(self) -> List[Dict]:
         """
         List all users.
 
         Returns:
             List of user objects
         """
-        return self._request("GET", "/v2/users")
+        return await self._request("GET", "/v2/users")
 
-    def get_organization_end_users(self, org_id: int) -> List[Dict]:
+    async def get_organization_end_users(self, org_id: int) -> List[Dict]:
         """
         Get list of end users for an organization.
 
@@ -1257,9 +1268,9 @@ class NinjaRMMClient:
         Returns:
             List of end user objects
         """
-        return self._request("GET", f"/v2/organization/{org_id}/end-users")
+        return await self._request("GET", f"/v2/organization/{org_id}/end-users")
 
-    def get_organization_location_backup_usage(
+    async def get_organization_location_backup_usage(
         self, org_id: int, location_id: int
     ) -> Dict:
         """
@@ -1272,11 +1283,11 @@ class NinjaRMMClient:
         Returns:
             Backup usage information
         """
-        return self._request(
+        return await self._request(
             "GET", f"/v2/organization/{org_id}/locations/{location_id}/backup/usage"
         )
 
-    def get_organization_custom_fields(self, org_id: int) -> List[Dict]:
+    async def get_organization_custom_fields(self, org_id: int) -> List[Dict]:
         """
         Get custom fields for an organization.
 
@@ -1286,9 +1297,9 @@ class NinjaRMMClient:
         Returns:
             List of custom field objects
         """
-        return self._request("GET", f"/v2/organization/{org_id}/custom-fields")
+        return await self._request("GET", f"/v2/organization/{org_id}/custom-fields")
 
-    def update_organization_custom_fields(
+    async def update_organization_custom_fields(
         self, org_id: int, custom_fields: Dict
     ) -> Dict:
         """
@@ -1301,11 +1312,11 @@ class NinjaRMMClient:
         Returns:
             Updated custom fields
         """
-        return self._request(
+        return await self._request(
             "PATCH", f"/v2/organization/{org_id}/custom-fields", json=custom_fields
         )
 
-    def get_organization_devices(self, org_id: int) -> List[Dict]:
+    async def get_organization_devices(self, org_id: int) -> List[Dict]:
         """
         Get all devices for an organization.
 
@@ -1315,9 +1326,9 @@ class NinjaRMMClient:
         Returns:
             List of device objects
         """
-        return self._request("GET", f"/v2/organization/{org_id}/devices")
+        return await self._request("GET", f"/v2/organization/{org_id}/devices")
 
-    def get_organization_locations_backup_usage(self, org_id: int) -> Dict:
+    async def get_organization_locations_backup_usage(self, org_id: int) -> Dict:
         """
         Get backup usage for all locations in an organization.
 
@@ -1327,9 +1338,11 @@ class NinjaRMMClient:
         Returns:
             Backup usage information for all locations
         """
-        return self._request("GET", f"/v2/organization/{org_id}/locations/backup/usage")
+        return await self._request(
+            "GET", f"/v2/organization/{org_id}/locations/backup/usage"
+        )
 
-    def get_device_jobs(self, device_id: int) -> List[Dict]:
+    async def get_device_jobs(self, device_id: int) -> List[Dict]:
         """
         Get currently running (active) jobs for a device.
 
@@ -1339,9 +1352,9 @@ class NinjaRMMClient:
         Returns:
             List of active job objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/jobs")
+        return await self._request("GET", f"/v2/device/{device_id}/jobs")
 
-    def get_device_disks(self, device_id: int) -> List[Dict]:
+    async def get_device_disks(self, device_id: int) -> List[Dict]:
         """
         Get disk drives for a device.
 
@@ -1351,9 +1364,9 @@ class NinjaRMMClient:
         Returns:
             List of disk drive objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/disks")
+        return await self._request("GET", f"/v2/device/{device_id}/disks")
 
-    def get_device_os_patch_installs(self, device_id: int) -> List[Dict]:
+    async def get_device_os_patch_installs(self, device_id: int) -> List[Dict]:
         """
         Get OS Patch installation report for device.
 
@@ -1363,9 +1376,9 @@ class NinjaRMMClient:
         Returns:
             List of OS patch installation reports
         """
-        return self._request("GET", f"/v2/device/{device_id}/os-patch-installs")
+        return await self._request("GET", f"/v2/device/{device_id}/os-patch-installs")
 
-    def get_device_software_patch_installs(self, device_id: int) -> List[Dict]:
+    async def get_device_software_patch_installs(self, device_id: int) -> List[Dict]:
         """
         Get Software Patch history for device.
 
@@ -1375,9 +1388,11 @@ class NinjaRMMClient:
         Returns:
             List of software patch installation history
         """
-        return self._request("GET", f"/v2/device/{device_id}/software-patch-installs")
+        return await self._request(
+            "GET", f"/v2/device/{device_id}/software-patch-installs"
+        )
 
-    def get_device_last_logged_on_user(self, device_id: int) -> Dict:
+    async def get_device_last_logged_on_user(self, device_id: int) -> Dict:
         """
         Get last logged-on user information for device.
 
@@ -1387,9 +1402,9 @@ class NinjaRMMClient:
         Returns:
             Last logged-on user information
         """
-        return self._request("GET", f"/v2/device/{device_id}/last-logged-on-user")
+        return await self._request("GET", f"/v2/device/{device_id}/last-logged-on-user")
 
-    def get_device_network_interfaces(self, device_id: int) -> List[Dict]:
+    async def get_device_network_interfaces(self, device_id: int) -> List[Dict]:
         """
         Get network interfaces for device.
 
@@ -1399,9 +1414,9 @@ class NinjaRMMClient:
         Returns:
             List of network interface objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/network-interfaces")
+        return await self._request("GET", f"/v2/device/{device_id}/network-interfaces")
 
-    def get_device_os_patches(self, device_id: int) -> List[Dict]:
+    async def get_device_os_patches(self, device_id: int) -> List[Dict]:
         """
         Get OS Patches for device.
 
@@ -1411,9 +1426,9 @@ class NinjaRMMClient:
         Returns:
             List of OS patch objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/os-patches")
+        return await self._request("GET", f"/v2/device/{device_id}/os-patches")
 
-    def get_device_software_patches(self, device_id: int) -> List[Dict]:
+    async def get_device_software_patches(self, device_id: int) -> List[Dict]:
         """
         Get Pending, Failed and Rejected Software patches for device.
 
@@ -1423,9 +1438,9 @@ class NinjaRMMClient:
         Returns:
             List of software patch objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/software-patches")
+        return await self._request("GET", f"/v2/device/{device_id}/software-patches")
 
-    def get_device_processors(self, device_id: int) -> List[Dict]:
+    async def get_device_processors(self, device_id: int) -> List[Dict]:
         """
         Get processors for device.
 
@@ -1435,9 +1450,9 @@ class NinjaRMMClient:
         Returns:
             List of processor objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/processors")
+        return await self._request("GET", f"/v2/device/{device_id}/processors")
 
-    def get_device_windows_services(self, device_id: int) -> List[Dict]:
+    async def get_device_windows_services(self, device_id: int) -> List[Dict]:
         """
         Get Windows services for device.
 
@@ -1447,9 +1462,9 @@ class NinjaRMMClient:
         Returns:
             List of Windows service objects
         """
-        return self._request("GET", f"/v2/device/{device_id}/windows-services")
+        return await self._request("GET", f"/v2/device/{device_id}/windows-services")
 
-    def get_device_custom_fields(self, device_id: int) -> Dict:
+    async def get_device_custom_fields(self, device_id: int) -> Dict:
         """
         Get custom fields for device.
 
@@ -1459,9 +1474,11 @@ class NinjaRMMClient:
         Returns:
             Device custom fields
         """
-        return self._request("GET", f"/v2/device/{device_id}/custom-fields")
+        return await self._request("GET", f"/v2/device/{device_id}/custom-fields")
 
-    def update_device_custom_fields(self, device_id: int, custom_fields: Dict) -> Dict:
+    async def update_device_custom_fields(
+        self, device_id: int, custom_fields: Dict
+    ) -> Dict:
         """
         Update custom field values for device.
 
@@ -1472,11 +1489,11 @@ class NinjaRMMClient:
         Returns:
             Updated device custom fields
         """
-        return self._request(
+        return await self._request(
             "PATCH", f"/v2/device/{device_id}/custom-fields", json=custom_fields
         )
 
-    def get_device_policy_overrides(self, device_id: int) -> Dict:
+    async def get_device_policy_overrides(self, device_id: int) -> Dict:
         """
         Get summary of device policy overrides.
 
@@ -1486,9 +1503,9 @@ class NinjaRMMClient:
         Returns:
             Device policy override summary
         """
-        return self._request("GET", f"/v2/device/{device_id}/policy/overrides")
+        return await self._request("GET", f"/v2/device/{device_id}/policy/overrides")
 
-    def control_windows_service(
+    async def control_windows_service(
         self,
         device_id: int,
         service_id: str,
@@ -1498,7 +1515,7 @@ class NinjaRMMClient:
         if action not in ("START", "STOP", "RESTART", "PAUSE", "RESUME"):
             raise NinjaRMMValidationError("Invalid service control action", "action")
 
-    def get_device_dashboard_url(self, device_id: int) -> str:
+    async def get_device_dashboard_url(self, device_id: int) -> str:
         """
         Get dashboard URL for a device.
 
@@ -1508,18 +1525,20 @@ class NinjaRMMClient:
         Returns:
             Dashboard URL string
         """
-        return self._request("GET", f"/v2/device/{device_id}/dashboard-url")
+        return await self._request("GET", f"/v2/device/{device_id}/dashboard-url")
 
-    def reset_device_policy_overrides(self, device_id: int) -> None:
+    async def reset_device_policy_overrides(self, device_id: int) -> None:
         """
         Reset all policy overrides for a device.
 
         Args:
             device_id (int): Device identifier
         """
-        self._request("DELETE", f"/v2/device/{device_id}/policy/overrides")
+        await self._request("DELETE", f"/v2/device/{device_id}/policy/overrides")
 
-    def reboot_device(self, device_id: int, mode: Literal["FORCE", "GRACEFUL"]) -> None:
+    async def reboot_device(
+        self, device_id: int, mode: Literal["FORCE", "GRACEFUL"]
+    ) -> None:
         """
         Reboot a device.
 
@@ -1536,18 +1555,18 @@ class NinjaRMMClient:
             raise NinjaRMMValidationError(
                 "Invalid reboot mode. Must be 'FORCE' or 'GRACEFUL'", "mode"
             )
-        self._request("POST", f"/v2/device/{device_id}/reboot/{mode}")
+        await self._request("POST", f"/v2/device/{device_id}/reboot/{mode}")
 
-    def remove_device_owner(self, device_id: int) -> None:
+    async def remove_device_owner(self, device_id: int) -> None:
         """
         Remove owner from a device.
 
         Args:
             device_id (int): Device identifier
         """
-        self._request("DELETE", f"/v2/device/{device_id}/owner")
+        await self._request("DELETE", f"/v2/device/{device_id}/owner")
 
-    def get_device_scripting_options(self, device_id: int) -> Dict:
+    async def get_device_scripting_options(self, device_id: int) -> Dict:
         """
         Get scripting options for a device.
 
@@ -1557,9 +1576,9 @@ class NinjaRMMClient:
         Returns:
             Device scripting options
         """
-        return self._request("GET", f"/v2/device/{device_id}/scripting/options")
+        return await self._request("GET", f"/v2/device/{device_id}/scripting/options")
 
-    def run_device_script(self, device_id: int, script_id: int, **kwargs) -> Dict:
+    async def run_device_script(self, device_id: int, script_id: int, **kwargs) -> Dict:
         """
         Run a script or built-in action on a device.
 
@@ -1572,9 +1591,11 @@ class NinjaRMMClient:
             Script execution result
         """
         data = {"scriptId": script_id, **kwargs}
-        return self._request("POST", f"/v2/device/{device_id}/script/run", json=data)
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/script/run", json=data
+        )
 
-    def set_device_owner(self, device_id: int, owner_uid: str) -> None:
+    async def set_device_owner(self, device_id: int, owner_uid: str) -> None:
         """
         Set owner for a device.
 
@@ -1582,9 +1603,9 @@ class NinjaRMMClient:
             device_id (int): Device identifier
             owner_uid (str): Owner user ID
         """
-        self._request("POST", f"/v2/device/{device_id}/owner/{owner_uid}")
+        await self._request("POST", f"/v2/device/{device_id}/owner/{owner_uid}")
 
-    def configure_windows_service(
+    async def configure_windows_service(
         self, device_id: int, service_id: str, config: Dict
     ) -> None:
         """
@@ -1595,13 +1616,13 @@ class NinjaRMMClient:
             service_id (str): Service identifier
             config (Dict): Service configuration
         """
-        self._request(
+        await self._request(
             "POST",
             f"/v2/device/{device_id}/windows-service/{service_id}/configure",
             json=config,
         )
 
-    def generate_organization_installer(self, **kwargs) -> Dict:
+    async def generate_organization_installer(self, **kwargs) -> Dict:
         """
         Generate installer for organization.
 
@@ -1611,9 +1632,11 @@ class NinjaRMMClient:
         Returns:
             Installer information
         """
-        return self._request("POST", "/v2/organization/generate-installer", json=kwargs)
+        return await self._request(
+            "POST", "/v2/organization/generate-installer", json=kwargs
+        )
 
-    def generate_location_installer(
+    async def generate_location_installer(
         self, org_id: int, location_id: int, installer_type: str
     ) -> Dict:
         """
@@ -1627,12 +1650,12 @@ class NinjaRMMClient:
         Returns:
             Installer information
         """
-        return self._request(
+        return await self._request(
             "GET",
             f"/v2/organization/{org_id}/location/{location_id}/installer/{installer_type}",
         )
 
-    def create_policy(self, name: str, **kwargs) -> Dict:
+    async def create_policy(self, name: str, **kwargs) -> Dict:
         """
         Create a new policy.
 
@@ -1644,9 +1667,9 @@ class NinjaRMMClient:
             Created policy object
         """
         data = {"name": name, **kwargs}
-        return self._request("POST", "/v2/policies", json=data)
+        return await self._request("POST", "/v2/policies", json=data)
 
-    def get_location_custom_fields(self, org_id: int, location_id: int) -> Dict:
+    async def get_location_custom_fields(self, org_id: int, location_id: int) -> Dict:
         """
         Get custom fields for a specific location.
 
@@ -1657,11 +1680,11 @@ class NinjaRMMClient:
         Returns:
             Location custom fields
         """
-        return self._request(
+        return await self._request(
             "GET", f"/v2/organization/{org_id}/location/{location_id}/custom-fields"
         )
 
-    def update_location_custom_fields(
+    async def update_location_custom_fields(
         self, org_id: int, location_id: int, custom_fields: Dict
     ) -> Dict:
         """
@@ -1675,13 +1698,13 @@ class NinjaRMMClient:
         Returns:
             Updated location custom fields
         """
-        return self._request(
+        return await self._request(
             "PATCH",
             f"/v2/organization/{org_id}/location/{location_id}/custom-fields",
             json=custom_fields,
         )
 
-    def create_location_edf_document(self, json_data, org_id):
+    async def create_location_edf_document(self, json_data, org_id):
         """
         Create a location EDF document from MongoDB JSON data.
 
@@ -1746,17 +1769,18 @@ class NinjaRMMClient:
 
         return document
 
-    def __enter__(self) -> "NinjaRMMClient":
+    async def __aenter__(self) -> "AsyncNinjaRMMClient":
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.close()
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        await self.close()
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Close the session and cleanup resources."""
-        self.session.close()
+        await self._http.close()
+        await self.token_manager.close()
 
-    def set_timestamp_conversion(self, enabled: bool) -> None:
+    async def set_timestamp_conversion(self, enabled: bool) -> None:
         """
         Enable or disable automatic timestamp conversion.
 
@@ -1766,7 +1790,7 @@ class NinjaRMMClient:
         self.convert_timestamps = enabled
         logger.info(f"Timestamp conversion {'enabled' if enabled else 'disabled'}")
 
-    def get_timestamp_conversion_status(self) -> bool:
+    async def get_timestamp_conversion_status(self) -> bool:
         """
         Get the current timestamp conversion status.
 
@@ -1777,7 +1801,7 @@ class NinjaRMMClient:
 
     # Auto-pagination methods for easy retrieval of all records
 
-    def get_all_organizations(
+    async def get_all_organizations(
         self, page_size: int = 100, org_filter: Optional[str] = None
     ) -> List[Dict]:
         """
@@ -1790,11 +1814,11 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All organizations from all pages
         """
-        return self._get_all_with_after(
+        return await self._get_all_with_after(
             self.get_organizations, page_size=page_size, org_filter=org_filter
         )
 
-    def get_all_organizations_detailed(
+    async def get_all_organizations_detailed(
         self, page_size: int = 100, org_filter: Optional[str] = None
     ) -> List[Dict]:
         """
@@ -1807,11 +1831,11 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All detailed organizations from all pages
         """
-        return self._get_all_with_after(
+        return await self._get_all_with_after(
             self.get_organizations_detailed, page_size=page_size, org_filter=org_filter
         )
 
-    def get_all_devices(
+    async def get_all_devices(
         self,
         page_size: int = 100,
         org_filter: Optional[str] = None,
@@ -1830,7 +1854,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All devices from all pages
         """
-        return self._get_all_with_after(
+        return await self._get_all_with_after(
             self.get_devices,
             page_size=page_size,
             org_filter=org_filter,
@@ -1838,7 +1862,7 @@ class NinjaRMMClient:
             include_backup_usage=include_backup_usage,
         )
 
-    def get_all_devices_detailed(
+    async def get_all_devices_detailed(
         self,
         page_size: int = 100,
         org_filter: Optional[str] = None,
@@ -1857,7 +1881,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All detailed devices from all pages
         """
-        return self._get_all_with_after(
+        return await self._get_all_with_after(
             self.get_devices_detailed,
             page_size=page_size,
             org_filter=org_filter,
@@ -1865,7 +1889,290 @@ class NinjaRMMClient:
             include_backup_usage=include_backup_usage,
         )
 
-    def search_all_devices(
+    async def _resolve_org_ids(
+        self,
+        org_ids: Optional[List[int]] = None,
+        *,
+        page_size: int = 100,
+    ) -> List[int]:
+        if org_ids is not None:
+            return org_ids
+        orgs = await self.get_all_organizations(page_size=page_size)
+        return [org["id"] for org in orgs if org.get("id") is not None]
+
+    async def _fetch_flat_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        resource_name: str,
+        fetch_for_org: Callable[[int], Awaitable[List[Dict]]],
+    ) -> List[Dict]:
+        resolved_org_ids = await self._resolve_org_ids(org_ids, page_size=page_size)
+        if not resolved_org_ids:
+            return []
+
+        async def fetch(org_id: int) -> List[Dict]:
+            items = await fetch_for_org(org_id)
+            logger.info(
+                "Fetched %s %s for org_id=%s", len(items), resource_name, org_id
+            )
+            return items
+
+        results = await map_concurrent(
+            resolved_org_ids,
+            fetch,
+            max_concurrency=max_concurrency,
+        )
+        return [item for org_items in results for item in org_items]
+
+    async def get_devices_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        detailed: bool = True,
+        max_concurrency: int = 10,
+        expand: Optional[str] = "organization,location",
+        include_backup_usage: bool = False,
+    ) -> List[Dict]:
+        """
+        Get devices for one or more organizations with concurrent fetching.
+
+        When ``org_ids`` is omitted, all organizations are fetched first and
+        devices are retrieved for each organization in parallel. Returns a flat
+        list of device dicts (same shape as ``ninja.devices`` Mongo documents).
+
+        Args:
+            org_ids: Organization IDs to fetch. ``None`` fetches all organizations.
+            page_size: Number of devices per pagination page.
+            detailed: Use the detailed devices endpoint when ``True``.
+            max_concurrency: Maximum number of concurrent organization fetches.
+            expand: Expand fields passed to the device endpoints.
+            include_backup_usage: Whether to include backup usage data.
+
+        Returns:
+            List[Dict]: Device records from all requested organizations.
+        """
+        fetch_devices = (
+            self.get_all_devices_detailed if detailed else self.get_all_devices
+        )
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await fetch_devices(
+                page_size=page_size,
+                org_filter=f"org={org_id}",
+                expand=expand,
+                include_backup_usage=include_backup_usage,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="devices",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def get_organizations_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+    ) -> List[Dict]:
+        """
+        Get full organization details concurrently.
+
+        Returns a flat list of organization dicts with embedded locations and
+        policies (same shape as ``ninja.organizations`` Mongo documents).
+
+        Args:
+            org_ids: Organization IDs to fetch. ``None`` fetches all organizations.
+            page_size: Page size used when resolving all organization IDs.
+            max_concurrency: Maximum number of concurrent organization fetches.
+
+        Returns:
+            List[Dict]: Organization records from all requested organizations.
+        """
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return [await self.get_organization(org_id)]
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="organizations",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_windows_services_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        name: Optional[str] = None,
+        state: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query Windows services for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_windows_services(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                name=name,
+                state=state,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="windows services",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_operating_systems_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        timestamp_filter: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query operating systems for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_operating_systems(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                timestamp_filter=timestamp_filter,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="operating systems",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_os_patches_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        timestamp_filter: Optional[str] = None,
+        status: Optional[str] = None,
+        patch_type: Optional[str] = None,
+        severity: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query OS patches for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_os_patches(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                timestamp_filter=timestamp_filter,
+                status=status,
+                patch_type=patch_type,
+                severity=severity,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="OS patches",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_custom_fields_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        updated_after: Optional[str] = None,
+        fields: Optional[str] = None,
+        show_secure_values: Optional[bool] = None,
+    ) -> List[Dict]:
+        """
+        Query custom fields for one or more organizations concurrently.
+
+        Returns a flat list of custom field records (same shape as
+        ``ninja.custom_fields_updated`` Mongo documents).
+        """
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_custom_fields(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                updated_after=updated_after,
+                fields=fields,
+                show_secure_values=show_secure_values,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="custom fields",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def query_software_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+        installed_before: Optional[str] = None,
+        installed_after: Optional[str] = None,
+    ) -> List[Dict]:
+        """Query installed software for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.query_all_software(
+                page_size=page_size,
+                device_filter=f"org={org_id}",
+                installed_before=installed_before,
+                installed_after=installed_after,
+            )
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="software records",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def get_organization_documents_by_org(
+        self,
+        *,
+        org_ids: Optional[List[int]] = None,
+        page_size: int = 100,
+        max_concurrency: int = 10,
+    ) -> List[Dict]:
+        """Get organization documents for one or more organizations concurrently."""
+
+        async def fetch_for_org(org_id: int) -> List[Dict]:
+            return await self.get_organization_documents(org_id)
+
+        return await self._fetch_flat_by_org(
+            org_ids=org_ids,
+            page_size=page_size,
+            max_concurrency=max_concurrency,
+            resource_name="organization documents",
+            fetch_for_org=fetch_for_org,
+        )
+
+    async def search_all_devices(
         self, query: str, page_size: int = 100, **kwargs
     ) -> List[Dict]:
         """
@@ -1879,11 +2186,11 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All matching devices from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.search_devices, page_size=page_size, query=query, **kwargs
         )
 
-    def get_all_device_activities(
+    async def get_all_device_activities(
         self,
         device_id: int,
         start_time: Optional[float] = None,
@@ -1904,7 +2211,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All device activities from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.get_device_activities,
             page_size=page_size,
             device_id=device_id,
@@ -1913,7 +2220,7 @@ class NinjaRMMClient:
             activity_type=activity_type,
         )
 
-    def get_all_activities(
+    async def get_all_activities(
         self,
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
@@ -1932,7 +2239,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All activities from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.list_activities,
             page_size=page_size,
             start_time=start_time,
@@ -1942,9 +2249,9 @@ class NinjaRMMClient:
 
     # Iterator methods for memory-efficient processing
 
-    def iter_all_organizations(
+    async def iter_all_organizations(
         self, page_size: int = 100, org_filter: Optional[str] = None
-    ) -> Iterator[Dict]:
+    ) -> AsyncIterator[Dict]:
         """
         Iterate through ALL organizations one at a time using automatic pagination.
         Memory-efficient for processing large datasets.
@@ -1956,17 +2263,18 @@ class NinjaRMMClient:
         Yields:
             Dict: Organization objects one at a time
         """
-        yield from self._paginate_with_after(
+        async for item in self._paginate_with_after(
             self.get_organizations, page_size=page_size, org_filter=org_filter
-        )
+        ):
+            yield item
 
-    def iter_all_devices(
+    async def iter_all_devices(
         self,
         page_size: int = 100,
         org_filter: Optional[str] = None,
         expand: Optional[str] = None,
         include_backup_usage: bool = False,
-    ) -> Iterator[Dict]:
+    ) -> AsyncIterator[Dict]:
         """
         Iterate through ALL devices one at a time using automatic pagination.
         Memory-efficient for processing large datasets.
@@ -1980,17 +2288,18 @@ class NinjaRMMClient:
         Yields:
             Dict: Device objects one at a time
         """
-        yield from self._paginate_with_after(
+        async for item in self._paginate_with_after(
             self.get_devices,
             page_size=page_size,
             org_filter=org_filter,
             expand=expand,
             include_backup_usage=include_backup_usage,
-        )
+        ):
+            yield item
 
-    def iter_search_devices(
+    async def iter_search_devices(
         self, query: str, page_size: int = 100, **kwargs
-    ) -> Iterator[Dict]:
+    ) -> AsyncIterator[Dict]:
         """
         Iterate through ALL search results one at a time using automatic cursor-based pagination.
         Memory-efficient for processing large datasets.
@@ -2003,13 +2312,14 @@ class NinjaRMMClient:
         Yields:
             Dict: Device objects one at a time
         """
-        yield from self._paginate_with_cursor(
+        async for item in self._paginate_with_cursor(
             self.search_devices, page_size=page_size, query=query, **kwargs
-        )
+        ):
+            yield item
 
     # Auto-pagination methods for query endpoints (/v2/queries)
 
-    def query_all_windows_services(
+    async def query_all_windows_services(
         self,
         device_filter: Optional[str] = None,
         name: Optional[str] = None,
@@ -2028,7 +2338,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All Windows services from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_windows_services,
             page_size=page_size,
             device_filter=device_filter,
@@ -2036,7 +2346,7 @@ class NinjaRMMClient:
             state=state,
         )
 
-    def query_all_operating_systems(
+    async def query_all_operating_systems(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2053,14 +2363,14 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All operating systems from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_operating_systems,
             page_size=page_size,
             device_filter=device_filter,
             timestamp_filter=timestamp_filter,
         )
 
-    def query_all_os_patches(
+    async def query_all_os_patches(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2083,7 +2393,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All OS patches from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_os_patches,
             page_size=page_size,
             device_filter=device_filter,
@@ -2093,7 +2403,7 @@ class NinjaRMMClient:
             severity=severity,
         )
 
-    def query_all_custom_fields(
+    async def query_all_custom_fields(
         self,
         device_filter: Optional[str] = None,
         updated_after: Optional[str] = None,
@@ -2114,7 +2424,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All custom fields from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_custom_fields,
             page_size=page_size,
             device_filter=device_filter,
@@ -2123,7 +2433,7 @@ class NinjaRMMClient:
             show_secure_values=show_secure_values,
         )
 
-    def query_all_software(
+    async def query_all_software(
         self,
         device_filter: Optional[str] = None,
         installed_before: Optional[str] = None,
@@ -2142,7 +2452,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All software from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_software,
             page_size=page_size,
             device_filter=device_filter,
@@ -2150,7 +2460,7 @@ class NinjaRMMClient:
             installed_after=installed_after,
         )
 
-    def query_all_backup_usage(
+    async def query_all_backup_usage(
         self, include_deleted_devices: Optional[bool] = None, page_size: int = 100
     ) -> List[Dict]:
         """
@@ -2163,7 +2473,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All backup usage data from all pages
         """
-        return self._get_all_with_cursor(
+        return await self._get_all_with_cursor(
             self.query_backup_usage,
             page_size=page_size,
             include_deleted_devices=include_deleted_devices,
@@ -2171,47 +2481,49 @@ class NinjaRMMClient:
 
     # Iterator versions for query endpoints (memory-efficient)
 
-    def iter_query_windows_services(
+    async def iter_query_windows_services(
         self,
         device_filter: Optional[str] = None,
         name: Optional[str] = None,
         state: Optional[str] = None,
         page_size: int = 100,
-    ) -> Iterator[Dict]:
+    ) -> AsyncIterator[Dict]:
         """
         Iterate through ALL Windows services one at a time using automatic cursor-based pagination.
         Memory-efficient for processing large datasets.
         """
-        yield from self._paginate_with_cursor(
+        async for item in self._paginate_with_cursor(
             self.query_windows_services,
             page_size=page_size,
             device_filter=device_filter,
             name=name,
             state=state,
-        )
+        ):
+            yield item
 
-    def iter_query_custom_fields(
+    async def iter_query_custom_fields(
         self,
         device_filter: Optional[str] = None,
         updated_after: Optional[str] = None,
         fields: Optional[str] = None,
         show_secure_values: Optional[bool] = None,
         page_size: int = 100,
-    ) -> Iterator[Dict]:
+    ) -> AsyncIterator[Dict]:
         """
         Iterate through ALL custom fields one at a time using automatic cursor-based pagination.
         Memory-efficient for processing large datasets.
         """
-        yield from self._paginate_with_cursor(
+        async for item in self._paginate_with_cursor(
             self.query_custom_fields,
             page_size=page_size,
             device_filter=device_filter,
             updated_after=updated_after,
             fields=fields,
             show_secure_values=show_secure_values,
-        )
+        ):
+            yield item
 
-    def iter_organizations(self, page_size: int = 100) -> Iterator[Dict]:
+    async def iter_organizations(self, page_size: int = 100) -> AsyncIterator[Dict]:
         """
         Iterate through all organizations using pagination.
 
@@ -2223,13 +2535,14 @@ class NinjaRMMClient:
         """
         last_id = None
         while True:
-            page = self.get_organizations(page_size=page_size, after=last_id)
+            page = await self.get_organizations(page_size=page_size, after=last_id)
             if not page:
                 break
-            yield from page
+            for item in page:
+                yield item
             last_id = page[-1]["id"]
 
-    def create_location(
+    async def create_location(
         self,
         org_id: int,
         name: str,
@@ -2247,17 +2560,16 @@ class NinjaRMMClient:
         Returns:
             dict: Created location object
         """
-        url = f"{self.base_url}/v2/organization/{org_id}/locations"
         data = {"name": name, "description": description, "address": address}
 
         # Remove None values
         data = {k: v for k, v in data.items() if v is not None}
 
-        response = self.session.post(url, json=data)
-        response.raise_for_status()
-        return response.json()
+        return await self._request(
+            "POST", f"/v2/organization/{org_id}/locations", json=data
+        )
 
-    def get_locations_by_organization_id(self, org_id: int) -> List[Dict]:
+    async def get_locations_by_organization_id(self, org_id: int) -> List[Dict]:
         """Get all locations for an organization
 
         Args:
@@ -2266,20 +2578,18 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: List of location objects
         """
-        return self._request(
-            "GET", f"/v2/organization/{org_id}/locations"
-        )
+        return await self._request("GET", f"/v2/organization/{org_id}/locations")
 
-    def get_locations(self) -> List[Dict]:
+    async def get_locations(self) -> List[Dict]:
         """Get all locations for an organization
 
 
         Returns:
             List[Dict]: List of location objects
         """
-        return self._request("GET", "/v2/locations")
+        return await self._request("GET", "/v2/locations")
 
-    def update_location(
+    async def update_location(
         self,
         org_id: int,
         location_id: int,
@@ -2299,17 +2609,18 @@ class NinjaRMMClient:
         Returns:
             Dict: Updated location object
         """
-        url = f"{self.base_url}/v2/organization/{org_id}/locations/{location_id}"
         data = {"name": name, "description": description, "address": address}
 
         # Remove None values
         data = {k: v for k, v in data.items() if v is not None}
 
-        response = self.session.patch(url, json=data)
-        response.raise_for_status()
-        return response.json()
+        return await self._request(
+            "PATCH",
+            f"/v2/organization/{org_id}/locations/{location_id}",
+            json=data,
+        )
 
-    def create_organization_documents(self, documents: List[Dict]) -> List[Dict]:
+    async def create_organization_documents(self, documents: List[Dict]) -> List[Dict]:
         """
         Create multiple organization documents.
 
@@ -2354,11 +2665,11 @@ class NinjaRMMClient:
                 }
             processed_documents.append(processed_doc)
 
-        return self._request(
+        return await self._request(
             "POST", "/v2/organization/documents", json=processed_documents
         )
 
-    def create_organization_document(
+    async def create_organization_document(
         self,
         organization_id: int,
         document_template_id: int,
@@ -2396,7 +2707,7 @@ class NinjaRMMClient:
         # Create a single document using the bulk endpoint
         return self.create_organization_documents([document])[0]
 
-    def update_organization_documents(self, documents: List[Dict]) -> List[Dict]:
+    async def update_organization_documents(self, documents: List[Dict]) -> List[Dict]:
         """
         Update multiple organization documents.
 
@@ -2432,11 +2743,11 @@ class NinjaRMMClient:
                 }
             processed_documents.append(processed_doc)
 
-        return self._request(
+        return await self._request(
             "PATCH", "/v2/organization/documents", json=processed_documents
         )
 
-    def update_organization_document(
+    async def update_organization_document(
         self,
         document_id: int,
         document_name: Optional[str] = None,
@@ -2467,11 +2778,11 @@ class NinjaRMMClient:
             # Remove None values from fields
             document["fields"] = {k: v for k, v in fields.items() if v is not None}
 
-        return self._request(
+        return await self._request(
             "PATCH", f"/v2/organization/documents/{document_id}", json=document
         )
 
-    def update_document_template(
+    async def update_document_template(
         self,
         template_id: int,
         name: Optional[str] = None,
@@ -2522,9 +2833,9 @@ class NinjaRMMClient:
                 raise ValueError("allowed_technician_roles must be a list of integers")
             data["allowedTechnicianRoles"] = allowed_technician_roles
 
-        return self._request("PUT", f"/v2/templates/{template_id}", json=data)
+        return await self._request("PUT", f"/v2/templates/{template_id}", json=data)
 
-    def get_all_organization_documents(
+    async def get_all_organization_documents(
         self,
         group_by: Optional[Literal["TEMPLATE", "ORGANIZATION"]] = None,
         organization_ids: Optional[str] = None,
@@ -2570,9 +2881,9 @@ class NinjaRMMClient:
         if document_name is not None:
             params["documentName"] = document_name
 
-        return self._request("GET", "/v2/organization/documents", params=params)
+        return await self._request("GET", "/v2/organization/documents", params=params)
 
-    def get_organization_documents(self, org_id: int) -> List[Dict]:
+    async def get_organization_documents(self, org_id: int) -> List[Dict]:
         """
         List organization documents with field values.
 
@@ -2593,9 +2904,9 @@ class NinjaRMMClient:
                 - documentTemplateName (str): Document template name
                 - organizationId (int): Organization identifier
         """
-        return self._request("GET", f"/v2/organization/{org_id}/documents")
+        return await self._request("GET", f"/v2/organization/{org_id}/documents")
 
-    def update_organization_document_by_id(
+    async def update_organization_document_by_id(
         self,
         org_id: int,
         document_id: int,
@@ -2638,12 +2949,12 @@ class NinjaRMMClient:
             # Remove None values from fields
             data["fields"] = {k: v for k, v in fields.items() if v is not None}
 
-        return self._request(
+        return await self._request(
             "POST", f"/v2/organization/{org_id}/document/{document_id}", json=data
         )
 
     # Query endpoints for system information reports
-    def query_windows_services(
+    async def query_windows_services(
         self,
         device_filter: Optional[str] = None,
         name: Optional[str] = None,
@@ -2677,9 +2988,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/windows-services", params=params)
+        return await self._request("GET", "/v2/queries/windows-services", params=params)
 
-    def query_operating_systems(
+    async def query_operating_systems(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2708,9 +3019,11 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/operating-systems", params=params)
+        return await self._request(
+            "GET", "/v2/queries/operating-systems", params=params
+        )
 
-    def query_os_patches(
+    async def query_os_patches(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2751,9 +3064,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/os-patches", params=params)
+        return await self._request("GET", "/v2/queries/os-patches", params=params)
 
-    def query_raid_controllers(
+    async def query_raid_controllers(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2782,9 +3095,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/raid-controllers", params=params)
+        return await self._request("GET", "/v2/queries/raid-controllers", params=params)
 
-    def query_os_patch_installs(
+    async def query_os_patch_installs(
         self,
         device_filter: Optional[str] = None,
         status: Optional[str] = None,
@@ -2821,9 +3134,11 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/os-patch-installs", params=params)
+        return await self._request(
+            "GET", "/v2/queries/os-patch-installs", params=params
+        )
 
-    def query_computer_systems(
+    async def query_computer_systems(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2852,9 +3167,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/computer-systems", params=params)
+        return await self._request("GET", "/v2/queries/computer-systems", params=params)
 
-    def query_device_health(
+    async def query_device_health(
         self,
         device_filter: Optional[str] = None,
         health: Optional[str] = None,
@@ -2883,9 +3198,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/device-health", params=params)
+        return await self._request("GET", "/v2/queries/device-health", params=params)
 
-    def query_disks(
+    async def query_disks(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2914,9 +3229,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/disks", params=params)
+        return await self._request("GET", "/v2/queries/disks", params=params)
 
-    def query_logged_on_users(
+    async def query_logged_on_users(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -2941,9 +3256,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/logged-on-users", params=params)
+        return await self._request("GET", "/v2/queries/logged-on-users", params=params)
 
-    def query_network_interfaces(
+    async def query_network_interfaces(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -2968,9 +3283,11 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/network-interfaces", params=params)
+        return await self._request(
+            "GET", "/v2/queries/network-interfaces", params=params
+        )
 
-    def query_raid_drives(
+    async def query_raid_drives(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -2999,9 +3316,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/raid-drives", params=params)
+        return await self._request("GET", "/v2/queries/raid-drives", params=params)
 
-    def query_volumes(
+    async def query_volumes(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -3034,9 +3351,9 @@ class NinjaRMMClient:
         if include:
             params["include"] = include
 
-        return self._request("GET", "/v2/queries/volumes", params=params)
+        return await self._request("GET", "/v2/queries/volumes", params=params)
 
-    def query_processors(
+    async def query_processors(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -3065,9 +3382,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/processors", params=params)
+        return await self._request("GET", "/v2/queries/processors", params=params)
 
-    def query_software(
+    async def query_software(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -3100,10 +3417,10 @@ class NinjaRMMClient:
         if installed_after:
             params["installedAfter"] = installed_after
 
-        return self._request("GET", "/v2/queries/software", params=params)
+        return await self._request("GET", "/v2/queries/software", params=params)
 
     # Additional missing query endpoints
-    def query_antivirus_status(
+    async def query_antivirus_status(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -3140,9 +3457,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/antivirus-status", params=params)
+        return await self._request("GET", "/v2/queries/antivirus-status", params=params)
 
-    def query_antivirus_threats(
+    async def query_antivirus_threats(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -3171,9 +3488,11 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/antivirus-threats", params=params)
+        return await self._request(
+            "GET", "/v2/queries/antivirus-threats", params=params
+        )
 
-    def query_custom_fields(
+    async def query_custom_fields(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -3210,9 +3529,9 @@ class NinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return self._request("GET", "/v2/queries/custom-fields", params=params)
+        return await self._request("GET", "/v2/queries/custom-fields", params=params)
 
-    def query_custom_fields_detailed(
+    async def query_custom_fields_detailed(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -3249,9 +3568,11 @@ class NinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return self._request("GET", "/v2/queries/custom-fields-detailed", params=params)
+        return await self._request(
+            "GET", "/v2/queries/custom-fields-detailed", params=params
+        )
 
-    def query_backup_usage(
+    async def query_backup_usage(
         self,
         cursor: Optional[str] = None,
         page_size: Optional[int] = None,
@@ -3276,9 +3597,9 @@ class NinjaRMMClient:
         if include_deleted_devices is not None:
             params["includeDeletedDevices"] = str(include_deleted_devices).lower()
 
-        return self._request("GET", "/v2/queries/backup/usage", params=params)
+        return await self._request("GET", "/v2/queries/backup/usage", params=params)
 
-    def query_software_patches(
+    async def query_software_patches(
         self,
         device_filter: Optional[str] = None,
         timestamp_filter: Optional[str] = None,
@@ -3323,9 +3644,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/software-patches", params=params)
+        return await self._request("GET", "/v2/queries/software-patches", params=params)
 
-    def query_policy_overrides(
+    async def query_policy_overrides(
         self,
         device_filter: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -3350,9 +3671,9 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/queries/policy-overrides", params=params)
+        return await self._request("GET", "/v2/queries/policy-overrides", params=params)
 
-    def query_scoped_custom_fields(
+    async def query_scoped_custom_fields(
         self,
         cursor: Optional[str] = None,
         page_size: Optional[int] = None,
@@ -3389,9 +3710,11 @@ class NinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return self._request("GET", "/v2/queries/scoped-custom-fields", params=params)
+        return await self._request(
+            "GET", "/v2/queries/scoped-custom-fields", params=params
+        )
 
-    def query_scoped_custom_fields_detailed(
+    async def query_scoped_custom_fields_detailed(
         self,
         cursor: Optional[str] = None,
         page_size: Optional[int] = None,
@@ -3428,12 +3751,12 @@ class NinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return self._request(
+        return await self._request(
             "GET", "/v2/queries/scoped-custom-fields-detailed", params=params
         )
 
     # Device management and maintenance functions
-    def schedule_device_maintenance(
+    async def schedule_device_maintenance(
         self,
         device_id: int,
         end: float,
@@ -3467,18 +3790,20 @@ class NinjaRMMClient:
         if disabled_features:
             data["disabledFeatures"] = disabled_features
 
-        return self._request("PUT", f"/v2/device/{device_id}/maintenance", json=data)
+        return await self._request(
+            "PUT", f"/v2/device/{device_id}/maintenance", json=data
+        )
 
-    def cancel_device_maintenance(self, device_id: int) -> None:
+    async def cancel_device_maintenance(self, device_id: int) -> None:
         """
         Cancel pending or active maintenance for device.
 
         Args:
             device_id (int): Device identifier
         """
-        return self._request("DELETE", f"/v2/device/{device_id}/maintenance")
+        return await self._request("DELETE", f"/v2/device/{device_id}/maintenance")
 
-    def control_windows_service_advanced(
+    async def control_windows_service_advanced(
         self,
         device_id: int,
         service_id: str,
@@ -3499,51 +3824,55 @@ class NinjaRMMClient:
             )
 
         data = {"action": action}
-        return self._request(
+        return await self._request(
             "POST",
             f"/v2/device/{device_id}/windows-service/{service_id}/control",
             json=data,
         )
 
     # Patch management functions
-    def run_os_patch_apply(self, device_id: int) -> None:
+    async def run_os_patch_apply(self, device_id: int) -> None:
         """
         Submit a job to start a device OS patch apply.
 
         Args:
             device_id (int): Device identifier
         """
-        return self._request("POST", f"/v2/device/{device_id}/patch/os/apply")
+        return await self._request("POST", f"/v2/device/{device_id}/patch/os/apply")
 
-    def run_os_patch_scan(self, device_id: int) -> None:
+    async def run_os_patch_scan(self, device_id: int) -> None:
         """
         Submit a job to start a device OS patch scan.
 
         Args:
             device_id (int): Device identifier
         """
-        return self._request("POST", f"/v2/device/{device_id}/patch/os/scan")
+        return await self._request("POST", f"/v2/device/{device_id}/patch/os/scan")
 
-    def run_software_patch_apply(self, device_id: int) -> None:
+    async def run_software_patch_apply(self, device_id: int) -> None:
         """
         Submit a job to start a device software patch apply.
 
         Args:
             device_id (int): Device identifier
         """
-        return self._request("POST", f"/v2/device/{device_id}/patch/software/apply")
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/patch/software/apply"
+        )
 
-    def run_software_patch_scan(self, device_id: int) -> None:
+    async def run_software_patch_scan(self, device_id: int) -> None:
         """
         Submit a job to start a device software patch scan.
 
         Args:
             device_id (int): Device identifier
         """
-        return self._request("POST", f"/v2/device/{device_id}/patch/software/scan")
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/patch/software/scan"
+        )
 
     # Group management functions
-    def get_group_device_ids(self, group_id: int) -> List[int]:
+    async def get_group_device_ids(self, group_id: int) -> List[int]:
         """
         Get list of device identifiers that match group criteria.
 
@@ -3553,10 +3882,10 @@ class NinjaRMMClient:
         Returns:
             List[int]: List of device identifiers
         """
-        return self._request("GET", f"/v2/group/{group_id}/device-ids")
+        return await self._request("GET", f"/v2/group/{group_id}/device-ids")
 
     # Backup functions
-    def get_backup_jobs(
+    async def get_backup_jobs(
         self,
         device_filter: Optional[str] = None,
         deleted_device_filter: Optional[str] = None,
@@ -3601,10 +3930,10 @@ class NinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return self._request("GET", "/v2/backup/jobs", params=params)
+        return await self._request("GET", "/v2/backup/jobs", params=params)
 
     # Document template functions
-    def get_document_template(
+    async def get_document_template(
         self, template_id: int, include_technician_roles: Optional[bool] = None
     ) -> Dict:
         """
@@ -3621,62 +3950,62 @@ class NinjaRMMClient:
         if include_technician_roles is not None:
             params["includeTechnicianRoles"] = str(include_technician_roles).lower()
 
-        return self._request(
+        return await self._request(
             "GET", f"/v2/document-templates/{template_id}", params=params
         )
 
-    def delete_document_template(self, template_id: int) -> None:
+    async def delete_document_template(self, template_id: int) -> None:
         """
         Delete a document template by ID.
 
         Args:
             template_id (int): Document template identifier
         """
-        return self._request("DELETE", f"/v2/document-templates/{template_id}")
+        return await self._request("DELETE", f"/v2/document-templates/{template_id}")
 
     # Ticketing functions
-    def get_ticket_attributes(self) -> List[Dict]:
+    async def get_ticket_attributes(self) -> List[Dict]:
         """
         Get list of ticket attributes.
 
         Returns:
             List[Dict]: List of ticket attribute objects
         """
-        return self._request("GET", "/v2/ticketing/attributes")
+        return await self._request("GET", "/v2/ticketing/attributes")
 
-    def get_contacts(self) -> List[Dict]:
+    async def get_contacts(self) -> List[Dict]:
         """
         Get list of contacts.
 
         Returns:
             List[Dict]: List of contact objects
         """
-        return self._request("GET", "/v2/ticketing/contact/contacts")
+        return await self._request("GET", "/v2/ticketing/contact/contacts")
 
-    def get_ticket_forms(self) -> List[Dict]:
+    async def get_ticket_forms(self) -> List[Dict]:
         """
         Get list of ticket forms with their fields.
 
         Returns:
             List[Dict]: List of ticket form objects
         """
-        return self._request("GET", "/v2/ticketing/ticket-form")
+        return await self._request("GET", "/v2/ticketing/ticket-form")
 
-    def get_ticket_statuses(self) -> List[Dict]:
+    async def get_ticket_statuses(self) -> List[Dict]:
         """
         Get list of ticket statuses.
 
         Returns:
             List[Dict]: List of ticket status objects
         """
-        return self._request("GET", "/v2/ticketing/statuses")
+        return await self._request("GET", "/v2/ticketing/statuses")
 
     # Enhanced organization and location management
     # Note: delete_organization method already exists earlier in the class
 
-    def _paginate_with_after(
+    async def _paginate_with_after(
         self, method_func: Callable, page_size: int = 100, **kwargs: Any
-    ) -> Generator[Dict, None, None]:
+    ) -> AsyncIterator[Dict]:
         """
         Generic pagination helper for endpoints that use 'after' parameter.
 
@@ -3694,7 +4023,7 @@ class NinjaRMMClient:
             logger.info(f"Fetching page with page_size={page_size}, after={after}")
 
             # Call the method with current pagination parameters
-            page_results = method_func(page_size=page_size, after=after, **kwargs)
+            page_results = await method_func(page_size=page_size, after=after, **kwargs)
 
             # If no results, we're done
             if not page_results:
@@ -3716,9 +4045,9 @@ class NinjaRMMClient:
                 )
                 break
 
-    def _paginate_with_cursor(
+    async def _paginate_with_cursor(
         self, method_func: Callable, page_size: int = 100, **kwargs: Any
-    ) -> Generator[Dict, None, None]:
+    ) -> AsyncIterator[Dict]:
         """
         Generic pagination helper for endpoints that use 'cursor' parameter.
 
@@ -3736,7 +4065,7 @@ class NinjaRMMClient:
             logger.info(f"Fetching page with page_size={page_size}, cursor={cursor}")
 
             # Call the method with current pagination parameters
-            response = method_func(page_size=page_size, cursor=cursor, **kwargs)
+            response = await method_func(page_size=page_size, cursor=cursor, **kwargs)
 
             # Handle the response structure for cursor-based endpoints
             if not isinstance(response, dict):
@@ -3771,7 +4100,7 @@ class NinjaRMMClient:
                     f"Received {count} items, less than page_size {page_size}, likely last page"
                 )
 
-    def _get_all_with_after(
+    async def _get_all_with_after(
         self, method_func: Callable, page_size: int = 100, **kwargs: Any
     ) -> List[Dict]:
         """
@@ -3785,11 +4114,11 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All items from all pages
         """
-        return list(
+        return await collect_all(
             self._paginate_with_after(method_func, page_size=page_size, **kwargs)
         )
 
-    def _get_all_with_cursor(
+    async def _get_all_with_cursor(
         self, method_func: Callable, page_size: int = 100, **kwargs: Any
     ) -> List[Dict]:
         """
@@ -3803,7 +4132,7 @@ class NinjaRMMClient:
         Returns:
             List[Dict]: All items from all pages
         """
-        return list(
+        return await collect_all(
             self._paginate_with_cursor(method_func, page_size=page_size, **kwargs)
         )
 
@@ -3811,7 +4140,7 @@ class NinjaRMMClient:
     # Asset Tags API
     # =========================================================================
 
-    def get_tags(self) -> Dict:
+    async def get_tags(self) -> Dict:
         """
         Get a list of all asset tags.
 
@@ -3833,9 +4162,9 @@ class NinjaRMMClient:
             NinjaRMMAuthError: If authentication fails
             NinjaRMMAPIError: If the API request fails
         """
-        return self._request("GET", "/v2/tag")
+        return await self._request("GET", "/v2/tag")
 
-    def create_tag(
+    async def create_tag(
         self,
         name: str,
         description: Optional[str] = None,
@@ -3866,9 +4195,9 @@ class NinjaRMMClient:
         if description is not None:
             data["description"] = description
 
-        return self._request("POST", "/v2/tag", json=data)
+        return await self._request("POST", "/v2/tag", json=data)
 
-    def update_tag(
+    async def update_tag(
         self,
         tag_id: int,
         name: Optional[str] = None,
@@ -3904,9 +4233,9 @@ class NinjaRMMClient:
         if description is not None:
             data["description"] = description
 
-        return self._request("PUT", f"/v2/tag/{tag_id}", json=data)
+        return await self._request("PUT", f"/v2/tag/{tag_id}", json=data)
 
-    def delete_tag(self, tag_id: int) -> None:
+    async def delete_tag(self, tag_id: int) -> None:
         """
         Delete a single asset tag.
 
@@ -3918,9 +4247,9 @@ class NinjaRMMClient:
             NinjaRMMAPIError: If the API request fails
                 - 404: Tag not found
         """
-        self._request("DELETE", f"/v2/tag/{tag_id}")
+        await self._request("DELETE", f"/v2/tag/{tag_id}")
 
-    def delete_tags(self, tag_ids: List[int]) -> None:
+    async def delete_tags(self, tag_ids: List[int]) -> None:
         """
         Delete multiple asset tags at once.
 
@@ -3932,9 +4261,9 @@ class NinjaRMMClient:
             NinjaRMMValidationError: If tag_ids is empty or invalid
             NinjaRMMAPIError: If the API request fails
         """
-        self._request("POST", "/v2/tag/delete", json=tag_ids)
+        await self._request("POST", "/v2/tag/delete", json=tag_ids)
 
-    def merge_tags(
+    async def merge_tags(
         self,
         tag_ids: List[int],
         merge_method: Literal["MERGE_INTO_EXISTING_TAG", "MERGE_INTO_NEW_TAG"],
@@ -3984,9 +4313,9 @@ class NinjaRMMClient:
         if description is not None:
             data["description"] = description
 
-        return self._request("POST", "/v2/tag/merge", json=data)
+        return await self._request("POST", "/v2/tag/merge", json=data)
 
-    def batch_tag_assets(
+    async def batch_tag_assets(
         self,
         asset_type: Literal["device"],
         asset_ids: List[int],
@@ -4013,9 +4342,9 @@ class NinjaRMMClient:
         if tag_ids_to_remove is not None:
             data["tagIdsToRemove"] = tag_ids_to_remove
 
-        self._request("POST", f"/v2/tag/{asset_type}", json=data)
+        await self._request("POST", f"/v2/tag/{asset_type}", json=data)
 
-    def set_asset_tags(
+    async def set_asset_tags(
         self,
         asset_type: Literal["device"],
         asset_id: int,
@@ -4039,4 +4368,57 @@ class NinjaRMMClient:
                 - 404: Asset not found
         """
         data: Dict[str, Any] = {"tagIds": tag_ids}
-        self._request("PUT", f"/v2/tag/{asset_type}/{asset_id}", json=data)
+        await self._request("PUT", f"/v2/tag/{asset_type}/{asset_id}", json=data)
+
+
+class NinjaRMMClient:
+    """Synchronous wrapper around AsyncNinjaRMMClient for backward compatibility."""
+
+    API_VERSION = AsyncNinjaRMMClient.API_VERSION
+    DEFAULT_BASE_URL = AsyncNinjaRMMClient.DEFAULT_BASE_URL
+    SCOPE_MONITORING = AsyncNinjaRMMClient.SCOPE_MONITORING
+    SCOPE_MANAGEMENT = AsyncNinjaRMMClient.SCOPE_MANAGEMENT
+    SCOPE_CONTROL = AsyncNinjaRMMClient.SCOPE_CONTROL
+    NODE_CLASS = AsyncNinjaRMMClient.NODE_CLASS
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._async = AsyncNinjaRMMClient(*args, **kwargs)
+        self._runner = SyncRunner()
+        self._wrap_public_methods()
+
+    def _wrap_public_methods(self) -> None:
+        for name in dir(self._async):
+            if not is_public_async_method(name, getattr(self._async, name)):
+                continue
+            attr = getattr(self._async, name)
+            if inspect.isasyncgenfunction(attr):
+                wrapped = wrap_async_iterator_method(self._runner, attr)
+            else:
+                wrapped = wrap_async_method(self._runner, attr)
+            setattr(self, name, wrapped)
+
+    @property
+    def token_manager(self) -> AsyncTokenManager:
+        return self._async.token_manager
+
+    @property
+    def base_url(self) -> str:
+        return self._async.base_url
+
+    @property
+    def convert_timestamps(self) -> bool:
+        return self._async.convert_timestamps
+
+    @convert_timestamps.setter
+    def convert_timestamps(self, value: bool) -> None:
+        self._async.convert_timestamps = value
+
+    def __enter__(self) -> "NinjaRMMClient":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._runner.run(self._async.close())
+        self._runner.close()
