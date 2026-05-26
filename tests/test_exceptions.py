@@ -35,6 +35,12 @@ class TestNinjaRMMExceptions:
         assert isinstance(error, NinjaRMMError)
         assert isinstance(error, Exception)
 
+    def test_validation_error_with_field(self):
+        """Test NinjaRMMValidationError with field parameter."""
+        error = NinjaRMMValidationError("Invalid input data", field="organizationId")
+        assert str(error) == "Invalid input data (field: organizationId)"
+        assert error.field == "organizationId"
+
     def test_api_error_with_message_only(self):
         """Test NinjaRMMAPIError with message only."""
         error = NinjaRMMAPIError("API request failed")

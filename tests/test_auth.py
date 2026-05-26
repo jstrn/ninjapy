@@ -166,6 +166,162 @@ class TestAsyncTokenManager:
         with pytest.raises(NinjaRMMAuthError):
             await self.token_manager._get_new_access_token()
 
+    @pytest.mark.asyncio
+    async def test_refresh_token_success(self, aioresponses):
+        self.token_manager._refresh_token_value = "refresh-token"
+
+        aioresponses.post(
+            self.token_url,
+            payload={
+                "access_token": "refreshed_access_token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "new-refresh-token",
+            },
+            status=200,
+        )
+
+        token = await self.token_manager._refresh_token()
+
+        assert token == "refreshed_access_token"
+        assert self.token_manager._access_token == "refreshed_access_token"
+        assert self.token_manager._refresh_token_value == "new-refresh-token"
+
+    @pytest.mark.asyncio
+    async def test_refresh_token_without_refresh_value(self):
+        self.token_manager._refresh_token_value = None
+
+        with pytest.raises(NinjaRMMAuthError, match="No refresh token available"):
+            await self.token_manager._refresh_token()
+
+    @pytest.mark.asyncio
+    async def test_get_valid_token_uses_refresh_when_expired(self, aioresponses):
+        self.token_manager._access_token = "expired_token"
+        self.token_manager._token_expiry = time.time() - 100
+        self.token_manager._refresh_token_value = "refresh-token"
+
+        aioresponses.post(
+            self.token_url,
+            payload={
+                "access_token": "refreshed_token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "refresh_token": "refresh-token",
+            },
+            status=200,
+        )
+
+        token = await self.token_manager.get_valid_token()
+
+        assert token == "refreshed_token"
+
+    @pytest.mark.asyncio
+    async def test_get_valid_token_falls_back_when_refresh_fails(self, aioresponses):
+        self.token_manager._access_token = "expired_token"
+        self.token_manager._token_expiry = time.time() - 100
+        self.token_manager._refresh_token_value = "bad-refresh-token"
+
+        aioresponses.post(self.token_url, status=401)
+        aioresponses.post(
+            self.token_url,
+            payload={
+                "access_token": "new_token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+            status=200,
+        )
+
+        token = await self.token_manager.get_valid_token()
+
+        assert token == "new_token"
+
+    def test_force_token_expiration_with_existing_token(self):
+        self.token_manager._token_expiry = time.time() + 3600
+        original = self.token_manager._token_expiry
+
+        self.token_manager.force_token_expiration()
+
+        assert self.token_manager._token_expiry < original
+
+    def test_force_token_expiration_without_token(self):
+        self.token_manager._token_expiry = None
+
+        self.token_manager.force_token_expiration()
+
+        assert self.token_manager._token_expiry is None
+
+    @pytest.mark.asyncio
+    async def test_external_session_is_reused(self):
+        session = aiohttp.ClientSession()
+        manager = AsyncTokenManager(
+            token_url=self.token_url,
+            client_id=self.client_id,
+            client_secret=self.client_secret,
+            scope=self.scope,
+            session=session,
+        )
+
+        assert await manager._get_session() is session
+
+        await manager.close()
+        await session.close()
+
+    @pytest.mark.asyncio
+    async def test_get_valid_token_without_refresh_uses_new_token(self, aioresponses):
+        self.token_manager._access_token = "expired_token"
+        self.token_manager._token_expiry = time.time() - 100
+        self.token_manager._refresh_token_value = None
+
+        aioresponses.post(
+            self.token_url,
+            payload={
+                "access_token": "fresh_token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            },
+            status=200,
+        )
+
+        token = await self.token_manager.get_valid_token()
+
+        assert token == "fresh_token"
+
+    @pytest.mark.asyncio
+    async def test_get_valid_token_reuses_token_inside_lock(self):
+        self.token_manager._access_token = "valid_token"
+        self.token_manager._token_expiry = time.time() + 1800
+
+        with patch.object(
+            self.token_manager,
+            "_is_token_expired",
+            side_effect=[True, False],
+        ):
+            token = await self.token_manager.get_valid_token()
+
+        assert token == "valid_token"
+
+    @pytest.mark.asyncio
+    async def test_get_valid_token_wraps_unexpected_errors(self):
+        self.token_manager._access_token = None
+        self.token_manager._token_expiry = None
+
+        with patch.object(
+            self.token_manager,
+            "_get_new_access_token",
+            new=AsyncMock(side_effect=ValueError("boom")),
+        ):
+            with pytest.raises(NinjaRMMAuthError, match="Token management failed"):
+                await self.token_manager.get_valid_token()
+
+    @pytest.mark.asyncio
+    async def test_close_closes_owned_session(self):
+        session = await self.token_manager._get_session()
+
+        await self.token_manager.close()
+
+        assert session.closed
+
 
 class TestTokenManager:
     """Test sync wrapper around AsyncTokenManager."""
@@ -193,6 +349,34 @@ class TestTokenManager:
 
         token = self.token_manager.get_valid_token()
         assert token == "sync_token"
+
+    def test_sync_wrapper_exposes_non_async_attributes(self):
+        assert self.token_manager.token_url == self.token_url
+
+    def test_sync_wrapper_property_delegation(self, aioresponses):
+        aioresponses.post(
+            self.token_url,
+            payload={
+                "access_token": "sync_token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+                "scope": "monitoring management control",
+            },
+            status=200,
+        )
+
+        self.token_manager.get_valid_token()
+
+        assert self.token_manager._access_token == "sync_token"
+        assert self.token_manager._token_expiry is not None
+        assert self.token_manager._refresh_token_value is None
+
+    def test_sync_wrapper_property_setters(self):
+        self.token_manager._access_token = "setter-token"
+        self.token_manager._token_expiry = 123.0
+
+        assert self.token_manager._async._access_token == "setter-token"
+        assert self.token_manager._async._token_expiry == 123.0
 
     def teardown_method(self):
         self.token_manager.close()

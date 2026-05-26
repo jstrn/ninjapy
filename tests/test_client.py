@@ -10,9 +10,18 @@ import pytest
 from aioresponses import aioresponses
 
 from ninjapy.client import AsyncNinjaRMMClient, NinjaRMMClient
-from ninjapy.exceptions import NinjaRMMAuthError, NinjaRMMError
+from ninjapy.exceptions import NinjaRMMAPIError, NinjaRMMAuthError, NinjaRMMError
 from ninjapy._http import ManagedClientSession
-from tests.conftest import get_request_json, get_request_url, mock_delete, mock_get, mock_patch, mock_post, mock_put, patch_valid_token
+from tests.conftest import (
+    get_request_json,
+    get_request_url,
+    mock_delete,
+    mock_get,
+    mock_patch,
+    mock_post,
+    mock_put,
+    patch_valid_token,
+)
 
 
 class TestNinjaRMMClient:
@@ -28,7 +37,9 @@ class TestNinjaRMMClient:
 
         # Mock the token manager to avoid actual OAuth calls
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             self.client = NinjaRMMClient(
@@ -53,7 +64,9 @@ class TestNinjaRMMClient:
             {"id": 2, "name": "Test Org 2", "description": "Test organization 2"},
         ]
 
-        mock_get(aioresponses, f"{self.base_url}/v2/organizations",
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/organizations",
             payload=mock_orgs,
             status=200,
         )
@@ -69,7 +82,9 @@ class TestNinjaRMMClient:
         """Test organizations retrieval with query parameters."""
         mock_orgs = [{"id": 1, "name": "Test Org"}]
 
-        mock_get(aioresponses, f"{self.base_url}/v2/organizations",
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/organizations",
             payload=mock_orgs,
             status=200,
         )
@@ -93,7 +108,11 @@ class TestNinjaRMMClient:
             {"id": 2, "displayName": "Test Device 2", "nodeClass": "WINDOWS_SERVER"},
         ]
 
-        mock_get(aioresponses, f"{self.base_url}/v2/devices", payload=mock_devices, status=200
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/devices",
+            payload=mock_devices,
+            status=200,
         )
 
         with patch_valid_token(self.client):
@@ -112,7 +131,11 @@ class TestNinjaRMMClient:
             "system": {"manufacturer": "Dell Inc.", "model": "OptiPlex 7090"},
         }
 
-        mock_get(aioresponses, f"{self.base_url}/v2/devices/1", payload=mock_device, status=200
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/devices/1",
+            payload=mock_device,
+            status=200,
         )
 
         with patch_valid_token(self.client):
@@ -130,7 +153,9 @@ class TestNinjaRMMClient:
             "description": "A new test organization",
         }
 
-        mock_post(aioresponses, f"{self.base_url}/v2/organizations",
+        mock_post(
+            aioresponses,
+            f"{self.base_url}/v2/organizations",
             payload=mock_org,
             status=201,
         )
@@ -145,7 +170,9 @@ class TestNinjaRMMClient:
 
     def test_http_error_handling(self, aioresponses):
         """Test HTTP error handling."""
-        mock_get(aioresponses, f"{self.base_url}/v2/organizations",
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/organizations",
             payload={"message": "Unauthorized"},
             status=401,
         )
@@ -156,7 +183,9 @@ class TestNinjaRMMClient:
 
     def test_api_error_handling(self, aioresponses):
         """Test API error handling for non-auth errors."""
-        mock_get(aioresponses, f"{self.base_url}/v2/devices/999",
+        mock_get(
+            aioresponses,
+            f"{self.base_url}/v2/devices/999",
             payload={"message": "Device not found"},
             status=404,
         )
@@ -181,9 +210,7 @@ class TestNinjaRMMClient:
         )
 
         with patch_valid_token(self.client):
-            with patch(
-                "ninjapy.client.asyncio.sleep", new=AsyncMock()
-            ) as mock_sleep:
+            with patch("ninjapy.client.asyncio.sleep", new=AsyncMock()) as mock_sleep:
                 orgs = self.client.get_organizations()
 
             assert len(orgs) == 1
@@ -195,7 +222,9 @@ class TestNinjaRMMClient:
         timeout = (2, 15)
 
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
             client = NinjaRMMClient(
                 token_url=self.token_url,
@@ -235,8 +264,7 @@ class TestNinjaRMMClient:
 
     def test_no_content_response(self, aioresponses):
         """Test handling of 204 No Content responses."""
-        mock_delete(aioresponses, f"{self.base_url}/v2/organizations/123", status=204
-        )
+        mock_delete(aioresponses, f"{self.base_url}/v2/organizations/123", status=204)
 
         with patch_valid_token(self.client):
             result = self.client.delete_organization(123)
@@ -246,7 +274,9 @@ class TestNinjaRMMClient:
     def test_context_manager(self):
         """Test client as context manager."""
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             with NinjaRMMClient(
@@ -267,11 +297,17 @@ class TestNinjaRMMClient:
 
         with aioresponses() as rsps:
             # First page
-            mock_get(rsps, f"{self.client.base_url}/v2/organizations", payload=page1,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/organizations",
+                payload=page1,
                 status=200,
             )
             # Second page
-            mock_get(rsps, f"{self.client.base_url}/v2/organizations", payload=page2,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/organizations",
+                payload=page2,
                 status=200,
             )
 
@@ -324,15 +360,24 @@ class TestNinjaRMMClient:
 
         with aioresponses() as rsps:
             # First page
-            mock_get(rsps, f"{self.client.base_url}/v2/devices/search", payload=page1_response,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/devices/search",
+                payload=page1_response,
                 status=200,
             )
             # Second page
-            mock_get(rsps, f"{self.client.base_url}/v2/devices/search", payload=page2_response,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/devices/search",
+                payload=page2_response,
                 status=200,
             )
             # Third page (empty)
-            mock_get(rsps, f"{self.client.base_url}/v2/devices/search", payload=page3_response,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/devices/search",
+                payload=page3_response,
                 status=200,
             )
 
@@ -399,7 +444,10 @@ class TestNinjaRMMClient:
         }
 
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/queries/windows-services", payload=response,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/queries/windows-services",
+                payload=response,
                 status=200,
             )
 
@@ -417,14 +465,19 @@ class TestNinjaRMMClient:
 
             # Check parameters
             assert "pageSize=50" in get_request_url(rsps)
-            assert "df=deviceClass+eq+%2527WINDOWS_WORKSTATION%2527" in get_request_url(rsps)
+            assert "df=deviceClass+eq+%2527WINDOWS_WORKSTATION%2527" in get_request_url(
+                rsps
+            )
             assert "name=test" in get_request_url(rsps)
             assert "state=running" in get_request_url(rsps)
 
     def test_pagination_empty_response(self):
         """Test pagination with empty response"""
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/organizations", payload=[],
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/organizations",
+                payload=[],
                 status=200,
             )
 
@@ -440,7 +493,10 @@ class TestNinjaRMMClient:
         page1 = [{"id": 1, "name": "org1"}, {"id": 2, "name": "org2"}]
 
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/organizations", payload=page1,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/organizations",
+                payload=page1,
                 status=200,
             )
 
@@ -455,7 +511,10 @@ class TestNinjaRMMClient:
         page1 = [{"name": "org1"}, {"name": "org2"}]  # Missing 'id' field
 
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/organizations", payload=page1,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/organizations",
+                payload=page1,
                 status=200,
             )
 
@@ -470,7 +529,10 @@ class TestNinjaRMMClient:
         bad_response = {"not_results": []}  # Missing 'results' key
 
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/devices/search", payload=bad_response,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/devices/search",
+                payload=bad_response,
                 status=200,
             )
 
@@ -485,7 +547,10 @@ class TestNinjaRMMClient:
         page1 = [{"id": 1, "name": "device1"}, {"id": 2, "name": "device2"}]
 
         with aioresponses() as rsps:
-            mock_get(rsps, f"{self.client.base_url}/v2/devices", payload=page1,
+            mock_get(
+                rsps,
+                f"{self.client.base_url}/v2/devices",
+                payload=page1,
                 status=200,
             )
 
@@ -512,7 +577,9 @@ class TestClientValidation:
     def test_endpoint_normalization(self):
         """Test that endpoints are properly normalized."""
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             client = NinjaRMMClient(
@@ -525,7 +592,13 @@ class TestClientValidation:
 
             # Test that endpoint gets normalized (leading slash added)
             with aioresponses() as rsps:
-                mock_get(rsps, "https://test.com/v2/test", payload={}, status=200, repeat=True)
+                mock_get(
+                    rsps,
+                    "https://test.com/v2/test",
+                    payload={},
+                    status=200,
+                    repeat=True,
+                )
 
                 # This should work whether we pass "v2/test" or "/v2/test"
                 with patch_valid_token(client):
@@ -539,7 +612,9 @@ class TestTimestampConversion:
     def setup_method(self):
         """Set up test fixtures."""
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             self.client = NinjaRMMClient(
@@ -564,7 +639,11 @@ class TestTimestampConversion:
             }
         ]
 
-        mock_get(aioresponses, "https://test.com/v2/devices", payload=mock_response, status=200
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/devices",
+            payload=mock_response,
+            status=200,
         )
 
         with patch_valid_token(self.client):
@@ -580,7 +659,9 @@ class TestTimestampConversion:
         """Test timestamp conversion when disabled."""
         # Create client with timestamp conversion disabled
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             client_no_conversion = NinjaRMMClient(
@@ -594,7 +675,11 @@ class TestTimestampConversion:
 
         mock_response = [{"id": 1, "created": 1728487941.725760}]
 
-        mock_get(aioresponses, "https://test.com/v2/devices", payload=mock_response, status=200
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/devices",
+            payload=mock_response,
+            status=200,
         )
 
         result = client_no_conversion.get_devices()
@@ -619,7 +704,9 @@ class TestClientErrorHandling:
     def setup_method(self):
         """Set up test fixtures."""
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             self.client = NinjaRMMClient(
@@ -673,6 +760,80 @@ class TestClientErrorHandling:
             with pytest.raises(NinjaRMMError):
                 self.client.get_organizations()
 
+    def test_permission_denied_error(self, aioresponses):
+        """Test 403 responses raise permission denied."""
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/organizations",
+            payload={"message": "Forbidden"},
+            status=403,
+        )
+
+        with patch_valid_token(self.client):
+            with pytest.raises(NinjaRMMError, match="Permission denied"):
+                self.client.get_organizations()
+
+    def test_retry_on_retryable_status(self, aioresponses):
+        """Test retryable HTTP statuses are retried before succeeding."""
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/organizations",
+            status=503,
+        )
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/organizations",
+            payload=[{"id": 1, "name": "Recovered Org"}],
+            status=200,
+        )
+
+        with patch_valid_token(self.client):
+            with patch("ninjapy.client.asyncio.sleep", new=AsyncMock()) as mock_sleep:
+                orgs = self.client.get_organizations()
+
+        assert orgs[0]["name"] == "Recovered Org"
+        mock_sleep.assert_called_once_with(1.0)
+
+    def test_api_error_includes_status_code(self, aioresponses):
+        """Test non-auth API errors preserve status code and message."""
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/organizations",
+            payload={"message": "Bad request"},
+            status=400,
+        )
+
+        with patch_valid_token(self.client):
+            with pytest.raises(NinjaRMMAPIError) as exc_info:
+                self.client.get_organizations()
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.message == "Bad request"
+
+    def test_error_response_without_json_body(self, aioresponses):
+        """Test error responses without JSON fall back to status reason."""
+        client = NinjaRMMClient(
+            token_url="https://test.com/token",
+            client_id="test",
+            client_secret="test",
+            scope="test",
+            base_url="https://test.com",
+            retry_total=0,
+        )
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/organizations",
+            body="Internal Server Error",
+            status=400,
+        )
+
+        with patch_valid_token(client):
+            with pytest.raises(NinjaRMMAPIError) as exc_info:
+                client.get_organizations()
+
+        assert exc_info.value.status_code == 400
+        client.close()
+
 
 class TestAssetTagsAPI:
     """Test cases for Asset Tags API endpoints."""
@@ -680,7 +841,9 @@ class TestAssetTagsAPI:
     def setup_method(self):
         """Set up test fixtures."""
         with patch("ninjapy.client.AsyncTokenManager") as mock_token_manager:
-            mock_token_manager.return_value.get_valid_token = AsyncMock(return_value="test_token")
+            mock_token_manager.return_value.get_valid_token = AsyncMock(
+                return_value="test_token"
+            )
             mock_token_manager.return_value.close = AsyncMock()
 
             self.client = NinjaRMMClient(
@@ -720,7 +883,9 @@ class TestAssetTagsAPI:
             ]
         }
 
-        mock_get(aioresponses, "https://test.com/v2/tag",
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/tag",
             payload=mock_response,
             status=200,
         )
@@ -745,7 +910,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 10,
         }
 
-        mock_post(aioresponses, "https://test.com/v2/tag",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag",
             payload=mock_response,
             status=200,
         )
@@ -775,7 +942,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 10,
         }
 
-        mock_post(aioresponses, "https://test.com/v2/tag",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag",
             payload=mock_response,
             status=200,
         )
@@ -798,7 +967,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 11,
         }
 
-        mock_put(aioresponses, "https://test.com/v2/tag/1",
+        mock_put(
+            aioresponses,
+            "https://test.com/v2/tag/1",
             payload=mock_response,
             status=200,
         )
@@ -824,7 +995,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 11,
         }
 
-        mock_put(aioresponses, "https://test.com/v2/tag/1",
+        mock_put(
+            aioresponses,
+            "https://test.com/v2/tag/1",
             payload=mock_response,
             status=200,
         )
@@ -843,7 +1016,9 @@ class TestAssetTagsAPI:
 
     def test_delete_tag_success(self, aioresponses):
         """Test successful deletion of a single asset tag."""
-        mock_delete(aioresponses, "https://test.com/v2/tag/1",
+        mock_delete(
+            aioresponses,
+            "https://test.com/v2/tag/1",
             status=204,
         )
 
@@ -855,7 +1030,9 @@ class TestAssetTagsAPI:
 
     def test_delete_tags_batch_success(self, aioresponses):
         """Test successful batch deletion of multiple asset tags."""
-        mock_post(aioresponses, "https://test.com/v2/tag/delete",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag/delete",
             status=204,
         )
 
@@ -880,7 +1057,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 11,
         }
 
-        mock_post(aioresponses, "https://test.com/v2/tag/merge",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag/merge",
             payload=mock_response,
             status=200,
         )
@@ -915,7 +1094,9 @@ class TestAssetTagsAPI:
             "updatedByUserId": 11,
         }
 
-        mock_post(aioresponses, "https://test.com/v2/tag/merge",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag/merge",
             payload=mock_response,
             status=200,
         )
@@ -943,7 +1124,9 @@ class TestAssetTagsAPI:
 
     def test_batch_tag_assets_add_and_remove(self, aioresponses):
         """Test batch adding and removing tags from assets."""
-        mock_post(aioresponses, "https://test.com/v2/tag/device",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag/device",
             status=200,
             payload={},
         )
@@ -966,7 +1149,9 @@ class TestAssetTagsAPI:
 
     def test_batch_tag_assets_add_only(self, aioresponses):
         """Test batch adding tags to assets without removing."""
-        mock_post(aioresponses, "https://test.com/v2/tag/device",
+        mock_post(
+            aioresponses,
+            "https://test.com/v2/tag/device",
             status=200,
             payload={},
         )
@@ -988,7 +1173,9 @@ class TestAssetTagsAPI:
 
     def test_set_asset_tags_success(self, aioresponses):
         """Test setting exact tags for an asset."""
-        mock_put(aioresponses, "https://test.com/v2/tag/device/100",
+        mock_put(
+            aioresponses,
+            "https://test.com/v2/tag/device/100",
             status=200,
             payload={},
         )
@@ -1008,7 +1195,9 @@ class TestAssetTagsAPI:
 
     def test_set_asset_tags_empty(self, aioresponses):
         """Test clearing all tags from an asset."""
-        mock_put(aioresponses, "https://test.com/v2/tag/device/100",
+        mock_put(
+            aioresponses,
+            "https://test.com/v2/tag/device/100",
             status=200,
             payload={},
         )
@@ -1028,7 +1217,9 @@ class TestAssetTagsAPI:
 
     def test_get_tags_error_handling(self, aioresponses):
         """Test error handling for get_tags."""
-        mock_get(aioresponses, "https://test.com/v2/tag",
+        mock_get(
+            aioresponses,
+            "https://test.com/v2/tag",
             payload={"message": "Unauthorized"},
             status=401,
         )
@@ -1039,7 +1230,9 @@ class TestAssetTagsAPI:
 
     def test_delete_tag_not_found(self, aioresponses):
         """Test deleting a tag that doesn't exist."""
-        mock_delete(aioresponses, "https://test.com/v2/tag/999",
+        mock_delete(
+            aioresponses,
+            "https://test.com/v2/tag/999",
             payload={"message": "Tag not found"},
             status=404,
         )

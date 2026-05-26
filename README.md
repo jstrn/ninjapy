@@ -15,6 +15,7 @@ A comprehensive Python API client for NinjaRMM (NinjaOne) with support for all m
 - **Rate Limiting**: Built-in retry logic and rate limit handling
 - **Timestamp Conversion**: Automatic conversion of epoch timestamps to ISO datetime format
 - **Async Support**: Native `AsyncNinjaRMMClient` with aiohttp, plus sync wrappers for backward compatibility
+- **Concurrent Fetching**: Built-in helpers for org-scoped parallel API calls (`get_devices_by_org`, `map_concurrent`)
 
 ## Installation
 
@@ -29,6 +30,22 @@ For development features:
 ```bash
 pip install ninjapy[dev]
 ```
+
+### Requirements
+
+- Python 3.11+
+- Runtime dependencies: `aiohttp`, `pandas`, `tqdm`
+
+### Upgrading to 0.2.0
+
+Version 0.2.0 replaces the `requests`/`urllib3` HTTP stack with `aiohttp`.
+
+- **Sync code**: Existing `NinjaRMMClient` usage should continue to work unchanged.
+- **Async code**: Use `AsyncNinjaRMMClient` directly for native async/await workflows.
+- **Jupyter / running event loops**: Do not call sync `NinjaRMMClient` methods from an active asyncio loop. Use `AsyncNinjaRMMClient` instead.
+- **Dependencies**: Remove any direct reliance on `requests` or `urllib3` from your app if you depended on them through ninjapy.
+
+See [CHANGELOG.md](CHANGELOG.md) for the full release notes.
 
 ## Quick Start
 
@@ -118,6 +135,60 @@ asyncio.run(main())
 ```
 
 Existing synchronous code can continue using `NinjaRMMClient`; it wraps the async implementation internally.
+
+In Jupyter or other environments with a running event loop, use the async client:
+
+```python
+from ninjapy import AsyncNinjaRMMClient
+
+client = AsyncNinjaRMMClient(
+    token_url="https://app.ninjarmm.com/oauth/token",
+    client_id="your_client_id",
+    client_secret="your_client_secret",
+    scope="monitoring management control",
+)
+
+organizations = await client.get_organizations()
+await client.close()
+```
+
+### Concurrent Organization Fetching
+
+For large tenants, fetch devices or organization details across many orgs in parallel:
+
+```python
+import asyncio
+from ninjapy import AsyncNinjaRMMClient, map_concurrent
+
+async def main():
+    async with AsyncNinjaRMMClient(
+        token_url="https://app.ninjarmm.com/oauth/token",
+        client_id="your_client_id",
+        client_secret="your_client_secret",
+        scope="monitoring management control",
+    ) as client:
+        # Fetch devices for specific orgs (or omit org_ids to fetch all orgs first)
+        devices = await client.get_devices_by_org(
+            org_ids=[9, 32],
+            max_concurrency=10,
+        )
+
+        # Fetch full organization records (locations, policies) concurrently
+        orgs = await client.get_organizations_by_org(max_concurrency=10)
+
+        # Generic bounded-concurrency helper for custom async workflows
+        results = await map_concurrent(
+            [9, 32],
+            lambda org_id: client.get_organization(org_id),
+            max_concurrency=5,
+        )
+
+asyncio.run(main())
+```
+
+Sync wrappers expose the same methods on `NinjaRMMClient` (`client.get_devices_by_org(...)`, etc.).
+
+Low-level pagination helpers are also exported from `ninjapy`: `paginate_after`, `paginate_cursor`, and `collect_all`.
 
 ### Device Management
 
@@ -235,6 +306,9 @@ print(f"Retrieved {len(custom_fields)} custom field entries")
 **Standard Pagination:**
 - `get_all_organizations()`, `get_all_devices()`, `get_all_devices_detailed()`
 - `iter_all_organizations()`, `iter_all_devices()` (memory-efficient iterators)
+- `get_devices_by_org()`, `get_organizations_by_org()` (concurrent org-scoped fetching)
+
+> **Note:** Sequential `get_all_*` methods fetch pages one at a time. Use `get_devices_by_org()` or `map_concurrent()` when you need org-level concurrency.
 
 **Cursor-Based Pagination:**
 - `search_all_devices()`, `get_all_device_activities()`, `get_all_activities()`
@@ -478,7 +552,7 @@ for org in client.iter_organizations(page_size=100):
 ```python
 # Use device filters for targeted queries
 windows_servers = client.get_devices(
-    org_filter="organization_id=123",
+    org_filter="org=123",
     expand="references"  # Include detailed reference data
 )
 

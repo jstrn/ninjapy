@@ -15,7 +15,12 @@ from .exceptions import (
     NinjaRMMValidationError,
 )
 from ._http import ManagedClientSession, build_client_timeout
-from ._sync import SyncRunner, is_public_async_method, wrap_async_iterator_method, wrap_async_method
+from ._sync import (
+    SyncRunner,
+    is_public_async_method,
+    wrap_async_iterator_method,
+    wrap_async_method,
+)
 from .utils import process_api_response
 
 # Configure logging
@@ -194,7 +199,10 @@ class AsyncNinjaRMMClient:
                         await asyncio.sleep(retry_after)
                         continue
 
-                    if response.status in self.retry_status_forcelist and attempt < max_attempts:
+                    if (
+                        response.status in self.retry_status_forcelist
+                        and attempt < max_attempts
+                    ):
                         backoff = self.retry_backoff_factor * (2 ** (attempt - 1))
                         logger.warning(
                             "Retrying %s after status %s (attempt %s/%s)",
@@ -355,7 +363,9 @@ class AsyncNinjaRMMClient:
         if template_org_id:
             params["templateOrganizationId"] = template_org_id
 
-        return await self._request("POST", "/v2/organizations", json=data, params=params)
+        return await self._request(
+            "POST", "/v2/organizations", json=data, params=params
+        )
 
     async def approve_devices(self, device_ids: List[int]) -> None:
         """
@@ -543,7 +553,9 @@ class AsyncNinjaRMMClient:
         if description:
             data["description"] = description
 
-        return await self._request("POST", f"/v2/organizations/{org_id}/locations", json=data)
+        return await self._request(
+            "POST", f"/v2/organizations/{org_id}/locations", json=data
+        )
 
     async def update_organization_location(
         self,
@@ -586,7 +598,9 @@ class AsyncNinjaRMMClient:
             org_id (int): Organization identifier
             location_id (int): Location identifier
         """
-        await self._request("DELETE", f"/v2/organizations/{org_id}/locations/{location_id}")
+        await self._request(
+            "DELETE", f"/v2/organizations/{org_id}/locations/{location_id}"
+        )
 
     async def get_organization_policies(self, org_id: int) -> List[Dict]:
         """
@@ -894,7 +908,9 @@ class AsyncNinjaRMMClient:
         Returns:
             List of custom fields policy conditions
         """
-        return await self._request("GET", f"/v2/policies/{policy_id}/condition/custom-fields")
+        return await self._request(
+            "GET", f"/v2/policies/{policy_id}/condition/custom-fields"
+        )
 
     async def create_custom_fields_policy_condition(
         self,
@@ -954,7 +970,9 @@ class AsyncNinjaRMMClient:
         Returns:
             List of windows event conditions
         """
-        return await self._request("GET", f"/v2/policies/{policy_id}/condition/windows-event")
+        return await self._request(
+            "GET", f"/v2/policies/{policy_id}/condition/windows-event"
+        )
 
     async def create_windows_event_condition(
         self,
@@ -987,7 +1005,9 @@ class AsyncNinjaRMMClient:
             "POST", f"/v2/policies/{policy_id}/condition/windows-event", json=data
         )
 
-    async def get_windows_event_condition(self, policy_id: int, condition_id: str) -> Dict:
+    async def get_windows_event_condition(
+        self, policy_id: int, condition_id: str
+    ) -> Dict:
         """
         Get specified windows event condition for specified policy.
 
@@ -1010,7 +1030,9 @@ class AsyncNinjaRMMClient:
             policy_id (int): Policy identifier
             condition_id (str): Condition identifier
         """
-        await self._request("DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}")
+        await self._request(
+            "DELETE", f"/v2/policies/{policy_id}/condition/{condition_id}"
+        )
 
     async def configure_webhook(
         self,
@@ -1316,7 +1338,9 @@ class AsyncNinjaRMMClient:
         Returns:
             Backup usage information for all locations
         """
-        return await self._request("GET", f"/v2/organization/{org_id}/locations/backup/usage")
+        return await self._request(
+            "GET", f"/v2/organization/{org_id}/locations/backup/usage"
+        )
 
     async def get_device_jobs(self, device_id: int) -> List[Dict]:
         """
@@ -1364,7 +1388,9 @@ class AsyncNinjaRMMClient:
         Returns:
             List of software patch installation history
         """
-        return await self._request("GET", f"/v2/device/{device_id}/software-patch-installs")
+        return await self._request(
+            "GET", f"/v2/device/{device_id}/software-patch-installs"
+        )
 
     async def get_device_last_logged_on_user(self, device_id: int) -> Dict:
         """
@@ -1450,7 +1476,9 @@ class AsyncNinjaRMMClient:
         """
         return await self._request("GET", f"/v2/device/{device_id}/custom-fields")
 
-    async def update_device_custom_fields(self, device_id: int, custom_fields: Dict) -> Dict:
+    async def update_device_custom_fields(
+        self, device_id: int, custom_fields: Dict
+    ) -> Dict:
         """
         Update custom field values for device.
 
@@ -1508,7 +1536,9 @@ class AsyncNinjaRMMClient:
         """
         await self._request("DELETE", f"/v2/device/{device_id}/policy/overrides")
 
-    async def reboot_device(self, device_id: int, mode: Literal["FORCE", "GRACEFUL"]) -> None:
+    async def reboot_device(
+        self, device_id: int, mode: Literal["FORCE", "GRACEFUL"]
+    ) -> None:
         """
         Reboot a device.
 
@@ -1561,7 +1591,9 @@ class AsyncNinjaRMMClient:
             Script execution result
         """
         data = {"scriptId": script_id, **kwargs}
-        return await self._request("POST", f"/v2/device/{device_id}/script/run", json=data)
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/script/run", json=data
+        )
 
     async def set_device_owner(self, device_id: int, owner_uid: str) -> None:
         """
@@ -1600,7 +1632,9 @@ class AsyncNinjaRMMClient:
         Returns:
             Installer information
         """
-        return await self._request("POST", "/v2/organization/generate-installer", json=kwargs)
+        return await self._request(
+            "POST", "/v2/organization/generate-installer", json=kwargs
+        )
 
     async def generate_location_installer(
         self, org_id: int, location_id: int, installer_type: str
@@ -2544,9 +2578,7 @@ class AsyncNinjaRMMClient:
         Returns:
             List[Dict]: List of location objects
         """
-        return await self._request(
-            "GET", f"/v2/organization/{org_id}/locations"
-        )
+        return await self._request("GET", f"/v2/organization/{org_id}/locations")
 
     async def get_locations(self) -> List[Dict]:
         """Get all locations for an organization
@@ -2987,7 +3019,9 @@ class AsyncNinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return await self._request("GET", "/v2/queries/operating-systems", params=params)
+        return await self._request(
+            "GET", "/v2/queries/operating-systems", params=params
+        )
 
     async def query_os_patches(
         self,
@@ -3100,7 +3134,9 @@ class AsyncNinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return await self._request("GET", "/v2/queries/os-patch-installs", params=params)
+        return await self._request(
+            "GET", "/v2/queries/os-patch-installs", params=params
+        )
 
     async def query_computer_systems(
         self,
@@ -3247,7 +3283,9 @@ class AsyncNinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return await self._request("GET", "/v2/queries/network-interfaces", params=params)
+        return await self._request(
+            "GET", "/v2/queries/network-interfaces", params=params
+        )
 
     async def query_raid_drives(
         self,
@@ -3450,7 +3488,9 @@ class AsyncNinjaRMMClient:
         if page_size:
             params["pageSize"] = str(page_size)
 
-        return await self._request("GET", "/v2/queries/antivirus-threats", params=params)
+        return await self._request(
+            "GET", "/v2/queries/antivirus-threats", params=params
+        )
 
     async def query_custom_fields(
         self,
@@ -3528,7 +3568,9 @@ class AsyncNinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return await self._request("GET", "/v2/queries/custom-fields-detailed", params=params)
+        return await self._request(
+            "GET", "/v2/queries/custom-fields-detailed", params=params
+        )
 
     async def query_backup_usage(
         self,
@@ -3668,7 +3710,9 @@ class AsyncNinjaRMMClient:
         if show_secure_values is not None:
             params["showSecureValues"] = str(show_secure_values).lower()
 
-        return await self._request("GET", "/v2/queries/scoped-custom-fields", params=params)
+        return await self._request(
+            "GET", "/v2/queries/scoped-custom-fields", params=params
+        )
 
     async def query_scoped_custom_fields_detailed(
         self,
@@ -3746,7 +3790,9 @@ class AsyncNinjaRMMClient:
         if disabled_features:
             data["disabledFeatures"] = disabled_features
 
-        return await self._request("PUT", f"/v2/device/{device_id}/maintenance", json=data)
+        return await self._request(
+            "PUT", f"/v2/device/{device_id}/maintenance", json=data
+        )
 
     async def cancel_device_maintenance(self, device_id: int) -> None:
         """
@@ -3810,7 +3856,9 @@ class AsyncNinjaRMMClient:
         Args:
             device_id (int): Device identifier
         """
-        return await self._request("POST", f"/v2/device/{device_id}/patch/software/apply")
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/patch/software/apply"
+        )
 
     async def run_software_patch_scan(self, device_id: int) -> None:
         """
@@ -3819,7 +3867,9 @@ class AsyncNinjaRMMClient:
         Args:
             device_id (int): Device identifier
         """
-        return await self._request("POST", f"/v2/device/{device_id}/patch/software/scan")
+        return await self._request(
+            "POST", f"/v2/device/{device_id}/patch/software/scan"
+        )
 
     # Group management functions
     async def get_group_device_ids(self, group_id: int) -> List[int]:
@@ -4319,6 +4369,7 @@ class AsyncNinjaRMMClient:
         """
         data: Dict[str, Any] = {"tagIds": tag_ids}
         await self._request("PUT", f"/v2/tag/{asset_type}/{asset_id}", json=data)
+
 
 class NinjaRMMClient:
     """Synchronous wrapper around AsyncNinjaRMMClient for backward compatibility."""

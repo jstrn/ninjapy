@@ -78,7 +78,9 @@ class SyncRunner:
         self._thread = None
 
 
-def sync_iterator_from_async(async_iterator: AsyncIterator[T], runner: SyncRunner) -> Iterator[T]:
+def sync_iterator_from_async(
+    async_iterator: AsyncIterator[T], runner: SyncRunner
+) -> Iterator[T]:
     """Bridge an async iterator into a synchronous iterator."""
 
     async def _drain() -> list[T]:

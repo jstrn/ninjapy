@@ -72,7 +72,9 @@ async def test_async_iterator_pagination(async_client, aioresponses):
     )
 
     with patch_valid_token_async(async_client):
-        items = [item async for item in async_client.iter_all_organizations(page_size=2)]
+        items = [
+            item async for item in async_client.iter_all_organizations(page_size=2)
+        ]
 
     assert len(items) == 3
 
