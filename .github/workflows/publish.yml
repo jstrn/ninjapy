@@ -166,7 +166,9 @@ jobs:
     needs: [test, build]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    
+    permissions:
+      contents: write
+
     steps:
     - uses: actions/checkout@v4
       with:
