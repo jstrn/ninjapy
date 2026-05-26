@@ -416,7 +416,7 @@ class AsyncNinjaRMMClient:
         Returns:
             Organization object
         """
-        return await self._request("GET", f"/v2/organizations/{org_id}")
+        return await self._request("GET", f"/v2/organization/{org_id}")
 
     async def update_organization(
         self,

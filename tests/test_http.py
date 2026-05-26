@@ -58,33 +58,46 @@ async def test_managed_session_context_manager():
 @pytest.mark.asyncio
 async def test_managed_session_update_headers():
     session = ManagedClientSession(headers={"Accept": "application/json"})
-    _ = session.session
+    try:
+        _ = session.session
 
-    session.update_headers({"Authorization": "Bearer token"})
+        session.update_headers({"Authorization": "Bearer token"})
 
-    assert session._headers["Authorization"] == "Bearer token"
-    assert session.session.headers["Authorization"] == "Bearer token"
+        assert session._headers["Authorization"] == "Bearer token"
+        assert session.session.headers["Authorization"] == "Bearer token"
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
 async def test_managed_session_recreates_closed_session():
     session = ManagedClientSession()
-    first = session.session
-    await session.close()
+    try:
+        first = session.session
+        await session.close()
 
-    second = session.session
+        second = session.session
 
-    assert first.closed
-    assert not second.closed
+        assert first.closed
+        assert not second.closed
+    finally:
+        await session.close()
 
 
 @pytest.mark.asyncio
 async def test_managed_session_refresh_when_session_closed():
     session = ManagedClientSession(pool_max_age=60.0)
-    _ = session.session
-    await session.close()
+    try:
+        _ = session.session
+        await session.close()
 
-    with patch.object(session, "_create_session", wraps=session._create_session) as mock_create:
-        await session.refresh_if_needed()
+        with patch.object(
+            session,
+            "_create_session",
+            wraps=session._create_session,
+        ) as mock_create:
+            await session.refresh_if_needed()
 
-    mock_create.assert_called_once()
+        mock_create.assert_called_once()
+    finally:
+        await session.close()

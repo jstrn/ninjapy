@@ -3,6 +3,7 @@ Tests for authentication functionality.
 """
 
 import time
+import uuid
 from unittest.mock import AsyncMock, patch
 
 import aiohttp
@@ -20,7 +21,7 @@ class TestAsyncTokenManager:
     def setup_method(self):
         self.token_url = "https://test.ninjarmm.com/oauth/token"
         self.client_id = "test_client_id"
-        self.client_secret = "test_client_secret"
+        self.client_secret = uuid.uuid4().hex
         self.scope = "monitoring management control"
         self.token_manager = AsyncTokenManager(
             token_url=self.token_url,
@@ -28,6 +29,11 @@ class TestAsyncTokenManager:
             client_secret=self.client_secret,
             scope=self.scope,
         )
+
+    @pytest.fixture(autouse=True)
+    async def cleanup_token_manager(self):
+        yield
+        await self.token_manager.close()
 
     @pytest.mark.asyncio
     async def test_get_token_success(self, aioresponses):
@@ -331,7 +337,7 @@ class TestTokenManager:
         self.token_manager = TokenManager(
             token_url=self.token_url,
             client_id="test_client_id",
-            client_secret="test_client_secret",
+            client_secret=uuid.uuid4().hex,
             scope="monitoring management control",
         )
 

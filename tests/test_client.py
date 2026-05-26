@@ -4,6 +4,7 @@ Tests for NinjaRMM client functionality.
 
 import asyncio
 import time
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,7 +32,7 @@ class TestNinjaRMMClient:
         """Set up test fixtures."""
         self.token_url = "https://test.ninjarmm.com/oauth/token"
         self.client_id = "test_client_id"
-        self.client_secret = "test_client_secret"
+        self.client_secret = uuid.uuid4().hex
         self.scope = "monitoring management control"
         self.base_url = "https://test.ninjarmm.com"
 
@@ -49,6 +50,10 @@ class TestNinjaRMMClient:
                 scope=self.scope,
                 base_url=self.base_url,
             )
+
+    def teardown_method(self):
+        """Close client resources."""
+        self.client.close()
 
     def test_client_initialization(self):
         """Test client initialization."""
@@ -235,32 +240,41 @@ class TestNinjaRMMClient:
                 request_timeout=timeout,
             )
 
-        assert client._async._client_timeout.connect == 2
-        assert client._async._client_timeout.sock_read == 15
+        try:
+            assert client._async._client_timeout.connect == 2
+            assert client._async._client_timeout.sock_read == 15
+        finally:
+            client.close()
 
     @pytest.mark.asyncio
     async def test_managed_session_refreshes_stale_pools(self):
         """Test stale aiohttp sessions are recycled before the next request."""
         session = ManagedClientSession(pool_max_age=1)
-        _ = session.session
-        session._last_refresh = time.monotonic() - 5
+        try:
+            _ = session.session
+            session._last_refresh = time.monotonic() - 5
 
-        with patch.object(session, "close", wraps=session.close) as mock_close:
-            await session.refresh_if_needed()
+            with patch.object(session, "close", wraps=session.close) as mock_close:
+                await session.refresh_if_needed()
 
-        mock_close.assert_called_once()
-        assert session._last_refresh > time.monotonic() - 2
+            mock_close.assert_called_once()
+            assert session._last_refresh > time.monotonic() - 2
+        finally:
+            await session.close()
 
     @pytest.mark.asyncio
     async def test_managed_session_forces_recycle_when_disabled(self):
         """Test non-positive pool max age recycles the session on each access."""
         session = ManagedClientSession(pool_max_age=0)
-        _ = session.session
+        try:
+            _ = session.session
 
-        with patch.object(session, "close", wraps=session.close) as mock_close:
-            await session.refresh_if_needed()
+            with patch.object(session, "close", wraps=session.close) as mock_close:
+                await session.refresh_if_needed()
 
-        mock_close.assert_called_once()
+            mock_close.assert_called_once()
+        finally:
+            await session.close()
 
     def test_no_content_response(self, aioresponses):
         """Test handling of 204 No Content responses."""
@@ -590,20 +604,23 @@ class TestClientValidation:
                 base_url="https://test.com",
             )
 
-            # Test that endpoint gets normalized (leading slash added)
-            with aioresponses() as rsps:
-                mock_get(
-                    rsps,
-                    "https://test.com/v2/test",
-                    payload={},
-                    status=200,
-                    repeat=True,
-                )
+            try:
+                # Test that endpoint gets normalized (leading slash added)
+                with aioresponses() as rsps:
+                    mock_get(
+                        rsps,
+                        "https://test.com/v2/test",
+                        payload={},
+                        status=200,
+                        repeat=True,
+                    )
 
-                # This should work whether we pass "v2/test" or "/v2/test"
-                with patch_valid_token(client):
-                    client._runner.run(client._async._request("GET", "v2/test"))
-                    client._runner.run(client._async._request("GET", "/v2/test"))
+                    # This should work whether we pass "v2/test" or "/v2/test"
+                    with patch_valid_token(client):
+                        client._runner.run(client._async._request("GET", "v2/test"))
+                        client._runner.run(client._async._request("GET", "/v2/test"))
+            finally:
+                client.close()
 
 
 class TestTimestampConversion:
@@ -625,6 +642,10 @@ class TestTimestampConversion:
                 base_url="https://test.com",
                 convert_timestamps=True,
             )
+
+    def teardown_method(self):
+        """Close client resources."""
+        self.client.close()
 
     def test_timestamp_conversion_enabled(self, aioresponses):
         """Test timestamp conversion when enabled."""
@@ -682,10 +703,13 @@ class TestTimestampConversion:
             status=200,
         )
 
-        result = client_no_conversion.get_devices()
+        try:
+            result = client_no_conversion.get_devices()
 
-        # Should return original timestamp values
-        assert result[0]["created"] == 1728487941.725760
+            # Should return original timestamp values
+            assert result[0]["created"] == 1728487941.725760
+        finally:
+            client_no_conversion.close()
 
     def test_set_timestamp_conversion(self):
         """Test setting timestamp conversion dynamically."""
@@ -716,6 +740,10 @@ class TestClientErrorHandling:
                 scope="test",
                 base_url="https://test.com",
             )
+
+    def teardown_method(self):
+        """Close client resources."""
+        self.client.close()
 
     def test_timeout_handling(self):
         """Test timeout error handling."""
@@ -853,6 +881,10 @@ class TestAssetTagsAPI:
                 scope="test",
                 base_url="https://test.com",
             )
+
+    def teardown_method(self):
+        """Close client resources."""
+        self.client.close()
 
     def test_get_tags_success(self, aioresponses):
         """Test successful retrieval of all asset tags."""

@@ -30,6 +30,23 @@ async def test_async_get_organizations(async_client, aioresponses):
 
 
 @pytest.mark.asyncio
+async def test_async_get_organization_uses_singular_detail_endpoint(
+    async_client, aioresponses
+):
+    mock_get(
+        aioresponses,
+        "https://test.ninjarmm.com/v2/organization/1",
+        payload={"id": 1, "name": "Async Org"},
+        status=200,
+    )
+
+    with patch_valid_token_async(async_client):
+        org = await async_client.get_organization(1)
+
+    assert org["name"] == "Async Org"
+
+
+@pytest.mark.asyncio
 async def test_async_context_manager_closes_session(aioresponses, client_kwargs):
     with patch("ninjapy.client.AsyncTokenManager") as mock_cls:
         mock_cls.return_value.get_valid_token = AsyncMock(return_value="test_token")
@@ -137,13 +154,13 @@ async def test_get_organizations_by_org(async_client, aioresponses):
     )
     mock_get(
         aioresponses,
-        f"{base_url}/v2/organizations/9",
+        f"{base_url}/v2/organization/9",
         payload={"id": 9, "name": "Org A", "locations": []},
         status=200,
     )
     mock_get(
         aioresponses,
-        f"{base_url}/v2/organizations/32",
+        f"{base_url}/v2/organization/32",
         payload={"id": 32, "name": "Org B", "locations": []},
         status=200,
     )

@@ -57,9 +57,14 @@ class SyncRunner:
         except RuntimeError:
             pass
         else:
+            coro.close()
             raise RuntimeError(_RUNNING_LOOP_ERROR)
 
-        loop = self._ensure_loop()
+        try:
+            loop = self._ensure_loop()
+        except Exception:
+            coro.close()
+            raise
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()
 

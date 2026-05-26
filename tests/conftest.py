@@ -97,12 +97,20 @@ def mock_async_token_manager():
 
 @pytest.fixture
 def client(client_kwargs, mock_async_token_manager):
-    return NinjaRMMClient(**client_kwargs)
+    client = NinjaRMMClient(**client_kwargs)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 @pytest.fixture
-def async_client(client_kwargs, mock_async_token_manager):
-    return AsyncNinjaRMMClient(**client_kwargs)
+async def async_client(client_kwargs, mock_async_token_manager):
+    client = AsyncNinjaRMMClient(**client_kwargs)
+    try:
+        yield client
+    finally:
+        await client.close()
 
 
 def get_request_json(mocked: Any, index: int = 0) -> Any:
